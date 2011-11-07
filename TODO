@@ -1,0 +1,11 @@
+
+- better file handling code
+  test file handling
+  best API?
+  mmap?
+
+- push trim to Data::BitStream
+
+- redo Data::BitStream to use our pos and len
+
+- testing
