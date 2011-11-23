@@ -7,7 +7,7 @@ BEGIN {
   $Data::BitStream::XS::AUTHORITY = 'cpan:DANAJ';
 }
 BEGIN {
-  $Data::BitStream::XS::VERSION = '0.02';
+  $Data::BitStream::XS::VERSION = '0.03';
 }
 
 # parent is cleaner, and in the Perl 5.10.1 / 5.12.0 core, but not earlier.
@@ -309,8 +309,7 @@ sub add_code {
   my $name = lc $$rinfo{'name'};
   if (defined $codeinfo{$name}) {
     return 1 if $codeinfo{$name}{'package'} eq $$rinfo{'package'};
-    die "module $$rinfo{'package'} trying to reuse code name '$name' already in 
-use by $codeinfo{$name}{'package'}";
+    die "module $$rinfo{'package'} trying to reuse code name '$name' already in use by $codeinfo{$name}{'package'}";
   }
   $codeinfo{$name} = $rinfo;
   1;
@@ -487,8 +486,9 @@ to.
 
 A file is associated with the stream.  The contents of the file will be
 slurped into the stream.  The given number of header lines will be skipped
-at the start.  While the current implementation slurps the contents, later
-implementations may read from the file as the stream is read.
+at the start (with their contents put into fheader so they can be retrieved).
+While the current implementation slurps the contents, later implementations
+may read from the file as the stream is read.
 
 =item B< maxbits >
 
@@ -573,7 +573,7 @@ These methods are only valid while the stream is in writing state.
 
 =item B< write($bits, $value) >
 
-Writes C<$value> to the stream using C<$bits> bits.  
+Writes C<$value> to the stream using C<$bits> bits.
 C<$bits> must be between C<1> and C<maxbits>, unless C<value> is 0 or 1, in
 which case C<bits> may be larger than C<maxbits>.
 
@@ -670,7 +670,7 @@ reading.  Methods for read such as
 C<read>, C<get>, C<skip>, C<rewind>, C<skip>, and C<exhausted>
 are not allowed while writing.  Methods for write such as
 C<write> and C<put>
-are not allowed while reading.  
+are not allowed while reading.
 
 The C<write_open> and C<erase_for_write> methods will set writing to true.
 The C<write_close> and C<rewind_for_read> methods will set writing to false.
@@ -700,6 +700,14 @@ A helper function that performs C<erase> followed by C<write_open>.
 =item B< rewind_for_read >
 
 A helper function that performs C<write_close> followed by C<rewind>.
+
+=item B< fheader >
+
+Returns the contents of the header lines read if the C<fheaderlines> option was
+given to C<new>.A  This allows one to read the header of an image format, with
+the stream pointing to the data, and the header contents easily obtainable.
+Unfortunately it isn't completely generic, as it assumes a fixed number of
+lines.  An alternative API would be to have a user supplied sub.
 
 =back
 
@@ -878,6 +886,8 @@ etc.
 =head1 SEE ALSO
 
 =over 4
+
+=item L<Data::BitStream>
 
 =item L<Data::BitStream::Base>
 

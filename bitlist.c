@@ -88,10 +88,11 @@ static void call_put_sub(SV* self, SV* code, BitList* list, WTYPE value)
 
 
 BitList *new(
-  FileMode mode,
-  char*    file,
-  int      fheaderlines,
-  int      initial_bits
+  FileMode    mode,
+  const char* file,
+  const char* fheaderdata,
+  int         fheaderlines,
+  int         initial_bits
 )
 {
   BitList *list = (BitList *) malloc(sizeof (BitList));
@@ -105,7 +106,7 @@ BitList *new(
 
   list->mode = mode;
   list->file = file;
-  list->file_header = 0;
+  list->file_header = (fheaderdata == 0)  ?  0  :  strdup(fheaderdata);
   list->file_header_lines = fheaderlines;
 
   list->is_writing = 0;
@@ -168,10 +169,9 @@ void DESTROY(BitList *list)
   if (list == 0) {
     croak("null object");
   } else {
-    if (list->is_writing)
-      write_close(list);
-    if (list->data != 0)
-      free(list->data);
+    if (list->is_writing)        write_close(list);
+    if (list->data != 0)         free(list->data);
+    if (list->file_header != 0)  free(list->file_header);
     free(list);
   }
 }
@@ -218,12 +218,13 @@ void read_open(BitList *list)
       croak("Cannot open file %s", list->file);
       return;
     }
-    /* Read in their header lines */
+    /* Read in their header lines.  This is hacky. */
     if (list->file_header_lines > 0) {
       int hline;
-      int maxbytes = 512 * list->file_header_lines;
+      int maxbytes = 1024 * list->file_header_lines;
       int nbytes = 0;
-      char* hbuf = (char*) malloc(nbytes);
+      char* hbuf = (char*) malloc(maxbytes);
+      assert(hbuf != 0);
       char* hptr = hbuf;
       for (hline = 0; hline < list->file_header_lines; hline++) {
         char* fresult;
@@ -245,7 +246,7 @@ void read_open(BitList *list)
       }
       hbuf = (char*) realloc(hbuf, nbytes+1);
       if (list->file_header != 0)
-        free(list->file_header);
+        free( (void*) list->file_header );
       list->file_header = hbuf;
     }
     /* Read the number of bits */
@@ -328,7 +329,10 @@ WTYPE sread(BitList *list, int bits)
     croak("invalid bits: %d", bits);
     return W_ZERO;
   }
-  assert( (list->pos + bits) <= list->len );
+  if ( (list->pos + bits) > list->len ) {
+    croak("read off end of stream");
+    return W_ZERO;
+  }
 #if 0
   WTYPE v = sreadahead(list, bits);
 #else
@@ -454,7 +458,7 @@ void swrite(BitList *list, int bits, WTYPE value)
   list->len = len + bits;
 }
 
-void put_string(BitList *list, char* s)
+void put_string(BitList *list, const char* s)
 {
   /* Write words.  Reasonably fast. */
   WTYPE word;
@@ -555,7 +559,7 @@ char* to_raw(BitList *list)
   }
   return buf;
 }
-void from_raw(BitList *list, char* str, int bits)
+void from_raw(BitList *list, const char* str, int bits)
 {
   if ( (str == 0) || (bits < 0) ) {
     croak("invalid input to from_raw");
@@ -564,7 +568,7 @@ void from_raw(BitList *list, char* str, int bits)
   resize(list, bits);
   if (bits > 0) {
     int bytes = NBYTES(bits);
-    char* bptr = str;
+    const char* bptr = str;
     list->pos = 0;
     list->len = 0;
     while (bytes-- > 0) {
@@ -755,16 +759,17 @@ void put_unary1 (BitList *list, WTYPE value)
 WTYPE get_gamma (BitList *list)
 {
   WTYPE base, v;
+  int pos = list->pos;
   assert( list->pos < list->len );
   base = get_unary(list);
-  if (base > BITS_PER_WORD) {
-    croak("Invalid base: %lu", base);
-    return W_ZERO;
-  }
   if (base == W_ZERO) {
     v = W_ZERO;
   } else if (base == BITS_PER_WORD) {
     v = W_FFFF;
+  } else if (base > BITS_PER_WORD) {
+    list->pos = pos;  /* restore position */
+    croak("code error: Gamma base %lu", base);
+    return W_ZERO;
   } else {
     v = ( (W_ONE << base) | sread(list, base) ) - W_ONE;
   }
@@ -790,16 +795,17 @@ void put_gamma (BitList *list, WTYPE value)
 WTYPE get_delta (BitList *list)
 {
   WTYPE base, v;
+  int pos = list->pos;
   assert( list->pos < list->len );
   base = get_gamma(list);
-  if (base > BITS_PER_WORD) {
-    croak("Invalid base: %lu", base);
-    return W_ZERO;
-  }
   if (base == W_ZERO) {
     v = W_ZERO;
   } else if (base == BITS_PER_WORD) {
     v = W_FFFF;
+  } else if (base > BITS_PER_WORD) {
+    list->pos = pos;  /* restore position */
+    croak("code error: Delta base %lu", base);
+    return W_ZERO;
   } else {
     v = ( (W_ONE << base) | sread(list, base) ) - W_ONE;
   }
@@ -826,11 +832,25 @@ WTYPE get_omega (BitList *list)
 {
   WTYPE first_bit;
   WTYPE v = W_ONE;
+  int pos = list->pos;
   assert( list->pos < list->len );
-  while ( (first_bit = sread(list, 1)) == 1 ) {
+  /* TODO: sread will croak if off stream, but position needs to be reset */
+  while ( (first_bit = sread(list, 1)) == W_ONE ) {
+    if (v == BITS_PER_WORD) {
+      return W_FFFF;
+    } else if (v > BITS_PER_WORD) {
+      list->pos = pos;  /* restore position */
+      croak("code error: Omega overflow");
+      return W_ZERO;
+    }
+    if ( (list->pos + (v+1)) > list->len ) {
+      list->pos = pos;  /* restore position */
+      croak("read off end of stream");
+      return W_ZERO;
+    }
     v = (W_ONE << v) | sread(list, v);
   }
-  return (v == W_ZERO) ? W_FFFF : v-W_ONE;
+  return (v - W_ONE);
 }
 
 void put_omega (BitList *list, WTYPE value)
@@ -839,7 +859,19 @@ void put_omega (BitList *list, WTYPE value)
   int   stack_b[BIT_STACK_SIZE];
   WTYPE stack_v[BIT_STACK_SIZE];
 
-  /* TODO: How to encode W_FFFF (~0) ? */
+  if (value == W_FFFF) {
+    /* Write the code that will make v = BITS_PER_WORD */
+    int fbits = 1 + (BITS_PER_WORD > 32);
+    swrite(list, 1, 1);
+    swrite(list, 1, 0);        /* v = 2                          */
+    swrite(list, 1, 1);
+    swrite(list, 2, fbits);    /* v = 5 (32-bit) or 6 (64-bit)   */
+    swrite(list, 1, 1);
+    swrite(list, 4+fbits, 0);  /* v = 2^5 (32)  /  2^6 (64)      */
+    swrite(list, 1, 1);        /* Decode v as bit count          */
+    return;
+  }
+
   value += W_ONE;
   { stack_b[sp] = 1; stack_v[sp] = 0; sp++; }
 
@@ -883,6 +915,7 @@ WTYPE get_fib (BitList *list)
 {
   int b;
   WTYPE code, v;
+  int pos = list->pos;
 
   assert( list->pos < list->len );
   _calc_fibv();
@@ -890,9 +923,12 @@ WTYPE get_fib (BitList *list)
   v = 0;
   b = -1;
   do {
-    /* TODO: check pos and len */
     b += (int) code+1;
-    assert(b <= maxfibv);
+    if (b > maxfibv) {
+      list->pos = pos;  /* restore position */
+      croak("code error: Fibonacci overflow");
+      return W_ZERO;
+    }
     v += fibv[b];
   } while ( (code = get_unary(list)) != 0);
   return(v-1);
@@ -946,6 +982,7 @@ void put_fib (BitList *list, WTYPE value)
 WTYPE get_levenstein (BitList *list)
 {
   WTYPE C, v;
+  int pos = list->pos;
   assert( list->pos < list->len );
   C = get_unary1(list);
   v = 0;
@@ -953,6 +990,16 @@ WTYPE get_levenstein (BitList *list)
     int i;
     v = 1;
     for (i = 1; i < C; i++) {
+      if (v > BITS_PER_WORD) {
+        list->pos = pos;  /* restore position */
+        croak("code error: Levenstein overflow");
+        return W_ZERO;
+      }
+      if ( (list->pos + v) > list->len ) {
+        list->pos = pos;  /* restore position */
+        croak("read off end of stream");
+        return W_ZERO;
+      }
       v = (W_ONE << v) | sread(list, v);
     }
   }
@@ -993,11 +1040,24 @@ void put_levenstein (BitList *list, WTYPE value)
 WTYPE get_evenrodeh (BitList *list)
 {
   WTYPE v, first_bit;
+  int pos = list->pos;
   assert( list->pos < list->len );
   v = sread(list, 3);
   if (v > 3) {
+    /* TODO: sread will croak if off stream, but position needs to be reset */
     while ( (first_bit = sread(list, 1)) == W_ONE ) {
-      v = (W_ONE << (v-W_ONE)) | sread(list, v-W_ONE);
+      v -= W_ONE;
+      if (v > BITS_PER_WORD) {
+        list->pos = pos;  /* restore position */
+        croak("code error: Even-Rodeh overflow");
+        return W_ZERO;
+      }
+      if ( (list->pos + v) > list->len ) {
+        list->pos = pos;  /* restore position */
+        croak("read off end of stream");
+        return W_ZERO;
+      }
+      v = (W_ONE << v) | sread(list, v);
     }
   }
   return v;
@@ -1485,14 +1545,14 @@ char* make_startstop_prefix_map(SV* paramref)
   return (char*) map;
 }
 
-WTYPE get_startstop  (BitList *list, char* cmap)
+WTYPE get_startstop  (BitList *list, const char* cmap)
 {
   int nparams, prefix, prefix_bits, bits;
   WTYPE minval;
   WTYPE v;
   WTYPE look;
   int looksize;
-  startstop_map_entry* map = (startstop_map_entry*) cmap;
+  const startstop_map_entry* map = (const startstop_map_entry*) cmap;
 
   assert(map != 0);
 
@@ -1514,12 +1574,12 @@ WTYPE get_startstop  (BitList *list, char* cmap)
   return v;
 }
 
-void put_startstop  (BitList *list, char* cmap, WTYPE value)
+void put_startstop  (BitList *list, const char* cmap, WTYPE value)
 {
   int nparams, prefix, prefix_bits, bits;
   WTYPE global_maxval, prefix_cmp, minval;
   WTYPE v;
-  startstop_map_entry* map = (startstop_map_entry*) cmap;
+  const startstop_map_entry* map = (const startstop_map_entry*) cmap;
 
   assert(map != 0);
   nparams = map[0].size;

@@ -27,7 +27,7 @@
 #define GET_CODEVP(codename, nargs, ...) \
    { \
     bool wantarray = (GIMME_V == G_ARRAY); \
-    unsigned long v; \
+    WTYPE v; \
     int c = 0; \
     if ( (list == 0) || (count == 0) || (list->pos >= list->len) ) { \
       if (wantarray) { XSRETURN_EMPTY; } else { XSRETURN_UNDEF; } \
@@ -82,11 +82,12 @@ MODULE = Data::BitStream::XS	PACKAGE = Data::BitStream::XS
 PROTOTYPES: ENABLE
 
 Data::BitStream::XS
-new (IN char* package, ...)
+new (IN const char* package, ...)
   PREINIT:
     int i;
     FileMode mode = eModeRW;
-    char* file = 0;
+    const char* file = 0;
+    const char* fheaderdata = 0;
     int   fheaderlines = 0;
     int   initial_bits = 0;
   CODE:
@@ -95,9 +96,9 @@ new (IN char* package, ...)
         croak("new takes a hash of options");
       for (i = 1; i < items; i += 2) {
         STRLEN klen, vlen;
-        char* key = SvPV(ST(i+0), klen);
+        const char* key = SvPV(ST(i+0), klen);
         if (!strcmp(key, "mode")) {
-          char* val = SvPV(ST(i+1), vlen);
+          const char* val = SvPV(ST(i+1), vlen);
           if     ((!strcmp(val,"r" ))||(!strcmp(val,"read")))      mode=eModeR;
           else if((!strcmp(val,"ro"))||(!strcmp(val,"readonly")))  mode=eModeRO;
           else if((!strcmp(val,"w" ))||(!strcmp(val,"write")))     mode=eModeW;
@@ -109,6 +110,8 @@ new (IN char* package, ...)
             croak("Unknown mode: %s", val);
         } else if (!strcmp(key, "file")) {
           file = SvPV(ST(i+1), vlen);
+        } else if (!strcmp(key, "fheader")) {
+          fheaderdata = SvPV(ST(i+1), vlen);
         } else if (!strcmp(key, "fheaderlines")) {
           fheaderlines = SvIV(ST(i+1));
         } else if (!strcmp(key, "size")) {
@@ -116,7 +119,7 @@ new (IN char* package, ...)
         }
       }
     }
-    RETVAL = new(mode, file, fheaderlines, initial_bits);
+    RETVAL = new(mode, file, fheaderdata, fheaderlines, initial_bits);
   OUTPUT:
     RETVAL
 
@@ -153,6 +156,19 @@ int
 pos(IN Data::BitStream::XS list)
   CODE:
     RETVAL = list->pos;
+  OUTPUT:
+    RETVAL
+
+SV *
+fheader(IN Data::BitStream::XS list)
+  PREINIT:
+    char* buf;
+  CODE:
+    if (list->file_header == 0) {
+      XSRETURN_UNDEF;
+    } else {
+      RETVAL = newSVpv(list->file_header, 0);
+    }
   OUTPUT:
     RETVAL
 
@@ -210,8 +226,8 @@ write_open(IN Data::BitStream::XS list)
 void
 write_close(IN Data::BitStream::XS list)
 
-unsigned long
-read(IN Data::BitStream::XS list, IN int bits, IN char* flags = 0)
+UV
+read(IN Data::BitStream::XS list, IN int bits, IN const char* flags = 0)
   PREINIT:
     int readahead;
   CODE:
@@ -236,7 +252,7 @@ read(IN Data::BitStream::XS list, IN int bits, IN char* flags = 0)
   OUTPUT:
     RETVAL
 
-unsigned long
+UV
 readahead(IN Data::BitStream::XS list, IN int bits)
   CODE:
     if (list->is_writing) {
@@ -254,7 +270,7 @@ readahead(IN Data::BitStream::XS list, IN int bits)
     RETVAL
 
 void
-write(IN Data::BitStream::XS list, IN int bits, IN unsigned long v)
+write(IN Data::BitStream::XS list, IN int bits, IN UV v)
   CODE:
     if (!list->is_writing) {
       croak("write while reading");
@@ -316,7 +332,7 @@ to_raw(IN Data::BitStream::XS list)
     RETVAL
 
 void
-from_raw(IN Data::BitStream::XS list, IN char* str, IN int bits)
+from_raw(IN Data::BitStream::XS list, IN const char* str, IN int bits)
 
 void
 xput_stream(IN Data::BitStream::XS list, IN Data::BitStream::XS source)
@@ -529,7 +545,7 @@ put_gamma_rice(IN Data::BitStream::XS list, IN int k, ...)
     PUT_CODEP(gamma_rice, k);
 
 void
-get_golomb_sub(IN Data::BitStream::XS list, IN SV* coderef, IN unsigned long m, IN int count = 1)
+get_golomb_sub(IN Data::BitStream::XS list, IN SV* coderef, IN UV m, IN int count = 1)
   PREINIT:
     SV* self = ST(0);
     SV* cref = 0;
@@ -551,7 +567,7 @@ get_golomb_sub(IN Data::BitStream::XS list, IN SV* coderef, IN unsigned long m, 
     GET_CODESPP(golomb_sub, self, cref, m);
 
 void
-put_golomb_sub(IN Data::BitStream::XS list, IN SV* coderef, IN unsigned long m, ...)
+put_golomb_sub(IN Data::BitStream::XS list, IN SV* coderef, IN UV m, ...)
   PREINIT:
     SV* self = ST(0);
     SV* cref = 0;
@@ -574,7 +590,7 @@ put_golomb_sub(IN Data::BitStream::XS list, IN SV* coderef, IN unsigned long m, 
 
 
 void
-get_gamma_golomb(IN Data::BitStream::XS list, IN unsigned long m, IN int count = 1)
+get_gamma_golomb(IN Data::BitStream::XS list, IN UV m, IN int count = 1)
   ALIAS:
     get_gammagolomb = 1
   PPCODE:
@@ -585,7 +601,7 @@ get_gamma_golomb(IN Data::BitStream::XS list, IN unsigned long m, IN int count =
     GET_CODEP(gamma_golomb, m);
 
 void
-put_gamma_golomb(IN Data::BitStream::XS list, IN unsigned long m, ...)
+put_gamma_golomb(IN Data::BitStream::XS list, IN UV m, ...)
   ALIAS:
     put_gammagolomb = 1
   CODE:
