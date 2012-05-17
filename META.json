@@ -33,10 +33,11 @@
       "runtime" : {
          "requires" : {
             "Exporter" : "5.562",
-            "Test::More" : "0.45"
+            "Test::More" : "0.45",
+            "perl" : "0"
          }
       }
    },
    "release_status" : "stable",
-   "version" : "0.04"
+   "version" : "0.05"
 }

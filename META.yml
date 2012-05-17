@@ -20,4 +20,5 @@ no_index:
 requires:
   Exporter: 5.562
   Test::More: 0.45
-version: 0.04
+  perl: 0
+version: 0.05
