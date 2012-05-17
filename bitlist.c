@@ -8,18 +8,59 @@
 #include "XSUB.h"
 
 #include "bitlist.h"
+#include "sequences.h"
 
 static int verbose = 0;
 
+
+/********************  bit stack functions  ********************/
+
 #define BIT_STACK_SIZE 32
 
+/* Combining writes when possible saves time.  If done in the push, it also
+ * means our stack is limited by number of bits instead of number of pushes.
+ * This does a simple opportunistic combination instead of filling each word.
+ * Min bits possible in stack:  ((BITS_PER_WORD/2)+1) * (BIT_STACK_SIZE+1)
+ */
+#define MAKE_BITSTACK \
+  int   bs_p = 0; \
+  int   bs_top_bits = 0; \
+  WTYPE bs_top_val = W_ZERO; \
+  int   bs_stack_b[BIT_STACK_SIZE]; \
+  WTYPE bs_stack_v[BIT_STACK_SIZE];
+
+#define PUSH_BITSTACK(bits, value) \
+  { int b = bits; \
+    WTYPE v = (value) & (W_FFFF >> (BITS_PER_WORD - b)); \
+    if ((bs_top_bits + b) <= BITS_PER_WORD) { \
+      bs_top_val |= (v << bs_top_bits); \
+      bs_top_bits += b; \
+    } else { \
+      assert(bs_p < BIT_STACK_SIZE); \
+      bs_stack_b[bs_p] = bs_top_bits; \
+      bs_stack_v[bs_p] = bs_top_val; \
+      bs_p++; \
+      bs_top_bits = b; \
+      bs_top_val = v; \
+    } \
+  }
+#define WRITE_BITSTACK(list) \
+  if (bs_top_bits > 0) { \
+    swrite(list, bs_top_bits, bs_top_val); \
+    while (bs_p-- > 0) \
+      swrite(list, bs_stack_b[bs_p], bs_stack_v[bs_p]); \
+  }
+
+
+/********************  how to grow list  ********************/
 static void expand_list(BitList *list, int len)
 {
   if ( len > list->maxlen )
     resize(list, 1.10 * (len+4096) );
 }
 
-/* This is for debugging */
+
+/********************  debugging  ********************/
 static char binstr[BITS_PER_WORD+1];
 static char* word_to_bin(WTYPE word)
 {
@@ -31,6 +72,8 @@ static char* word_to_bin(WTYPE word)
   binstr[BITS_PER_WORD] = '\0';
   return binstr;
 }
+
+/********************  dealing with sub calls  ********************/
 
 static WTYPE call_get_sub(SV* self, SV* code, BitList* list)
 {
@@ -51,7 +94,7 @@ static WTYPE call_get_sub(SV* self, SV* code, BitList* list)
   if (count != 1)
     croak("get sub should return one value");
 
-  v = POPul;                         /* Get the returned value              */
+  v = POPu;                          /* Get the returned value              */
 
   /* TODO:
    *   Something isn't right here -- the stack is messed up if I do the
@@ -86,6 +129,8 @@ static void call_put_sub(SV* self, SV* code, BitList* list, WTYPE value)
   LEAVE;
 }
 
+
+/********************  BitList basics  ********************/
 
 BitList *new(
   FileMode    mode,
@@ -149,7 +194,7 @@ int resize(BitList *list, int bits)
     int newwords = NWORDS(bits);
     list->data = (WTYPE*) realloc(list->data, newwords * sizeof(WTYPE));
     if (list->data == 0) {
-      croak("failed to alloc %d bits", bits);
+      croak("allocation failure: could not alloc %d bits", bits);
     } else if (newwords > oldwords) {
       /* Zero out any new allocated space */
       memset( list->data + oldwords,  0,  (newwords-oldwords)*sizeof(WTYPE) );
@@ -203,6 +248,9 @@ int _set_pos(BitList *list, int newpos)
   return list->pos;
 }
 
+
+/********************  BitList file i/o  ********************/
+
 void read_open(BitList *list)
 {
   if (list->mode == eModeWO) {
@@ -215,7 +263,7 @@ void read_open(BitList *list)
     unsigned long bits;
     FILE* fh = fopen(list->file, "r");
     if (!fh) {
-      croak("Cannot open file %s", list->file);
+      croak("Cannot open file '%s' for read", list->file);
       return;
     }
     /* Read in their header lines.  This is hacky. */
@@ -304,7 +352,7 @@ void write_close(BitList *list)
         return;
       fh = fopen(list->file, "w");
       if (!fh) {
-        croak("Cannot open file %s", list->file);
+        croak("Cannot open file '%s' for write", list->file);
       } else {
         if (list->file_header != 0)
           fprintf(fh, "%s\n", list->file_header);
@@ -320,13 +368,16 @@ void write_close(BitList *list)
   assert(list->is_writing == 0);
 }
 
+
+/********************  BitList read/write  ********************/
+
 WTYPE sread(BitList *list, int bits)
 {
   WTYPE v;
   int wpos, bpos, wlen;
 
   if ( (bits <= 0) || (bits > BITS_PER_WORD) ) {
-    croak("invalid bits: %d", bits);
+    croak("invalid parameters: bits %d must be 1-%d", bits, (int)BITS_PER_WORD);
     return W_ZERO;
   }
   if ( (list->pos + bits) > list->len ) {
@@ -360,7 +411,7 @@ WTYPE sreadahead(BitList *list, int bits)
   int shift, wpos, bpos, wlen;
 
   if ( (bits <= 0) || (bits > BITS_PER_WORD) ) {
-    croak("invalid bits: %d", bits);
+    croak("invalid parameters: bits %d must be 1-%d", bits, (int)BITS_PER_WORD);
     return W_ZERO;
   }
 
@@ -399,7 +450,7 @@ void swrite(BitList *list, int bits, WTYPE value)
   int wpos, bpos, wlen;
 
   if (bits <= 0) {
-    croak("invalid bits: %d", bits);
+    croak("invalid parameters: bits %d must be > 0", bits);
     return;
   }
 
@@ -416,7 +467,7 @@ void swrite(BitList *list, int bits, WTYPE value)
 
   /* We allowed writing 0 and 1 with any number of positive bits. */
   if (bits > BITS_PER_WORD) {
-    croak("invalid bits: %d", bits);
+    croak("invalid parameters: bits %d must be 1-%d", bits, (int)BITS_PER_WORD);
     return;
   }
 
@@ -458,6 +509,9 @@ void swrite(BitList *list, int bits, WTYPE value)
   list->len = len + bits;
 }
 
+
+/********************  BitList basic put/get  ********************/
+
 void put_string(BitList *list, const char* s)
 {
   /* Write words.  Reasonably fast. */
@@ -489,7 +543,7 @@ char* read_string(BitList *list, int bits)
   assert (bits <= (list->len - list->pos));
   buf = (char*) malloc(bits+1);
   if (buf == 0) {
-    croak("alloc failure");
+    croak("allocation failure: could not alloc %d bits", bits+1);
     return 0;
   }
 #if 0
@@ -558,6 +612,23 @@ char* to_raw(BitList *list)
     }
   }
   return buf;
+}
+void put_raw(BitList *list, const char* str, int bits)
+{
+  if ( (str == 0) || (bits < 0) ) {
+    croak("invalid input to put_raw");
+    return;
+  }
+  const char* bptr = str;
+  int bytes = bits / 8;
+  while (bytes-- > 0) {
+    swrite(list, 8, *bptr++);
+  }
+  bits = bits % 8;
+  if (bits > 0) {
+    int val = (*bptr & 0xFF) >> (8-bits);
+    swrite(list, bits, val);
+  }
 }
 void from_raw(BitList *list, const char* str, int bits)
 {
@@ -672,7 +743,10 @@ WTYPE get_unary (BitList *list)
 void put_unary (BitList *list, WTYPE value)
 {
   int len, bits, wpos, bpos;
-  /* Simple way to do this:   swrite(list, value+1, 1); */
+
+  assert(value >= 0);
+
+  /* Simple way to do this:   swrite(list, value+1, W_ONE); */
   len = list->len;
   bits = value+1;
 
@@ -739,6 +813,8 @@ void put_unary1 (BitList *list, WTYPE value)
   int bpos = len % BITS_PER_WORD;
   int first_bits = BITS_PER_WORD - bpos;
 
+  assert(value >= 0);
+
   expand_list(list, len+value+1);
 
   if ( (bpos > 0) && (first_bits <= value) ) {
@@ -746,9 +822,17 @@ void put_unary1 (BitList *list, WTYPE value)
     bpos = 0;
     value -= first_bits;
   }
-  while (value > BITS_PER_WORD) {
-    list->data[wpos++] = W_FFFF;
-    value -= BITS_PER_WORD;
+  /* Straightforward word-setting code:
+   *   while (value > BITS_PER_WORD) {
+   *     list->data[wpos++] = W_FFFF;
+   *     value -= BITS_PER_WORD;
+   *   }
+   */
+  if (value >= BITS_PER_WORD) {
+    int nwords = value / BITS_PER_WORD;
+    memset((char*) (list->data + wpos), 0xFF, nwords * sizeof(WTYPE));
+    value -= nwords * BITS_PER_WORD;
+    wpos += nwords;
   }
   if (value > 0)
     list->data[wpos] |= ( (W_FFFF << (BITS_PER_WORD-value)) >> bpos);
@@ -768,7 +852,7 @@ WTYPE get_gamma (BitList *list)
     v = W_FFFF;
   } else if (base > BITS_PER_WORD) {
     list->pos = pos;  /* restore position */
-    croak("code error: Gamma base %lu", base);
+    croak("code error: Gamma base %lu", (unsigned long)base);
     return W_ZERO;
   } else {
     v = ( (W_ONE << base) | sread(list, base) ) - W_ONE;
@@ -778,6 +862,7 @@ WTYPE get_gamma (BitList *list)
 
 void put_gamma (BitList *list, WTYPE value)
 {
+  assert(value >= 0);
   if (value == W_ZERO) {
     swrite(list, 1, 1);
   } else if (value == W_FFFF) {
@@ -804,7 +889,7 @@ WTYPE get_delta (BitList *list)
     v = W_FFFF;
   } else if (base > BITS_PER_WORD) {
     list->pos = pos;  /* restore position */
-    croak("code error: Delta base %lu", base);
+    croak("code error: Delta base %lu", (unsigned long)base);
     return W_ZERO;
   } else {
     v = ( (W_ONE << base) | sread(list, base) ) - W_ONE;
@@ -855,9 +940,7 @@ WTYPE get_omega (BitList *list)
 
 void put_omega (BitList *list, WTYPE value)
 {
-  int sp = 0;
-  int   stack_b[BIT_STACK_SIZE];
-  WTYPE stack_v[BIT_STACK_SIZE];
+  MAKE_BITSTACK;
 
   if (value == W_FFFF) {
     /* Write the code that will make v = BITS_PER_WORD */
@@ -873,22 +956,18 @@ void put_omega (BitList *list, WTYPE value)
   }
 
   value += W_ONE;
-  { stack_b[sp] = 1; stack_v[sp] = 0; sp++; }
+  PUSH_BITSTACK(1, W_ZERO);
 
   while (value > W_ONE) {
     WTYPE v = value;
     int base = 0;
     while ( (v >>= 1) != 0)
       base++;
-    assert(sp < BIT_STACK_SIZE);
-    { stack_b[sp] = base+1; stack_v[sp] = value; sp++; }
+    PUSH_BITSTACK(base+1, value);
     value = base;
   }
 
-  while (sp > 0) {
-    sp--;
-    swrite(list, stack_b[sp], stack_v[sp]);
-  }
+  WRITE_BITSTACK(list);
 }
 
 #define MAXFIB 100
@@ -929,6 +1008,11 @@ WTYPE get_fib (BitList *list)
       croak("code error: Fibonacci overflow");
       return W_ZERO;
     }
+    if (list->pos >= list->len) {
+      list->pos = pos;  /* restore position */
+      croak("read off end of stream");
+      return W_ZERO;
+    }
     v += fibv[b];
   } while ( (code = get_unary(list)) != 0);
   return(v-1);
@@ -936,11 +1020,14 @@ WTYPE get_fib (BitList *list)
 
 void put_fib (BitList *list, WTYPE value)
 {
-  int   sp = 0;
-  int   stack_b[BIT_STACK_SIZE];
-  WTYPE stack_v[BIT_STACK_SIZE];
-  int s, bits;
-  WTYPE v, word;
+  MAKE_BITSTACK;
+  int s;
+  WTYPE v;
+
+  if (value < 2) {
+    swrite(list, 2+value, W_CONST(3));
+    return;
+  }
 
   _calc_fibv();
 
@@ -948,7 +1035,7 @@ void put_fib (BitList *list, WTYPE value)
    * then add it to a stack when full.  When done, we pop off each word from
    * the stack and write it. */
 
-  s = 0;
+  s = 3;  /* 0 and 1 taken care of earlier, so value >= 2 */
   while ( (s <= maxfibv) && (value >= (fibv[s]-1)) )
     s++;
 
@@ -956,26 +1043,152 @@ void put_fib (BitList *list, WTYPE value)
   v = value - fibv[--s] + 1;
 
   /* Current word we're constructing.  Trailing '11' filled in. */
-  word = W_CONST(3);
-  bits = 2;
+  PUSH_BITSTACK(2, W_CONST(3));
 
   while (s-- > 0) {
-    assert(sp < BIT_STACK_SIZE);
     if (v >= fibv[s]) {
       v -= fibv[s];
-      word |= (W_ONE << bits);
-    }
-    bits++;
-    if (bits >= BITS_PER_WORD) {
-      stack_b[sp] = bits;  stack_v[sp] = word;  sp++;
-      bits = 0;
-      word = 0;
+      PUSH_BITSTACK(1, W_ONE);
+    } else {
+      PUSH_BITSTACK(1, W_ZERO);
     }
   }
-  if (bits)
-    swrite(list, bits, word);
-  while (sp-- > 0) {
-    swrite(list, stack_b[sp], stack_v[sp]);
+  WRITE_BITSTACK(list);
+}
+
+/* Generalized Fibonacci codes */
+#define MAX_FIBGEN_M 16
+static WTYPE fibm_val[MAX_FIBGEN_M-1][MAXFIB] = {0};
+static WTYPE fibm_sum[MAX_FIBGEN_M-1][MAXFIB] = {0};
+static int   fibm_max[MAX_FIBGEN_M-1] = {0};
+static void _calc_fibm(int m)
+{
+  assert( (m >= 2) && (m <= MAX_FIBGEN_M) );
+  WTYPE* fv = &(fibm_val[m-2][0]);
+
+  if (fv[0] == 0) {
+    int i,j;
+    fv[0] = 1;
+    fv[1] = 2;
+    for (i = 2; i < MAXFIB; i++) {
+      WTYPE sum = fv[i-1] + (m > i);
+      for (j = 2; (j <= m) && (j <= i); j++)
+        sum += fv[i-j];
+      fv[i] = sum;
+      if (fv[i] < fv[i-1]) {
+        fibm_max[m-2] = i-1;
+        break;
+      }
+    }
+    assert(fibm_max[m-2] > 0);
+    /* calculate sums */
+    WTYPE* fs = &(fibm_sum[m-2][0]);
+    fs[0] = fv[0];
+    for (i = 1; i <= fibm_max[m-2]; i++) {
+      WTYPE sum = fs[i-1] + fv[i];
+      if (sum < fs[i-1])  sum = W_FFFF;
+      fs[i] = sum;
+    }
+  }
+}
+
+WTYPE get_fibgen (BitList *list, int m)
+{
+  int s;
+  WTYPE code, term, v;
+  WTYPE* fv = &(fibm_val[m-2][0]);
+  WTYPE* fs = &(fibm_sum[m-2][0]);
+  int fmax = fibm_max[m-2];
+  int pos = list->pos;
+
+  assert( list->pos < list->len );
+  _calc_fibm(m);
+  term = ~(W_FFFF << m);   /*   000001..1 */
+
+  /* For m=2, using get_unary works very well, as it will one or more bits
+   * in a single call, and the terminator is only two bits.  As m increases,
+   * more and more time is spent calling get_unary repeatedly to read the
+   * terminator.
+   *
+   * This code instead reads 1-m bits at a time, looking for the terminator.
+   * It could be slightly faster if it used readahead to get 16-32 bits at
+   * a time.
+   */
+
+  code = sread(list, m);
+  if (code == term)  return W_ZERO;
+
+  v = W_ONE;
+  s = 0;
+  while (1) {
+    int count, codelen, c;
+
+    count = 0;  while (code & (1 << count))  count++;
+
+    codelen = m-count;
+    if (codelen == 0)
+      break;
+
+    if ( (list->pos + codelen) > list->len ) {
+      list->pos = pos;  /* restore position */
+      croak("read off end of stream");
+      return W_ZERO;
+    }
+    code = (code << codelen) | sread(list, codelen);
+
+    for (c = m+codelen-1; c >= m; c--) {
+      if (s > fmax) {
+        list->pos = pos;  /* restore position */
+        croak("code error: Fibonacci overflow");
+        return W_ZERO;
+      }
+      if (code & (1 << c))
+        v += fv[s];
+      s++;
+    }
+    code &= term;
+  }
+  if (s >= 2)
+    v += fs[s-2];
+  return v;
+}
+
+void put_fibgen (BitList *list, int m, WTYPE value)
+{
+  WTYPE term;
+
+  _calc_fibm(m);
+  term = ~(W_FFFF << m);   /*   000001..1 */
+
+  if (value == 0) {
+    swrite(list, m, term);
+  } else if (value == 1) {
+    swrite(list, m+1, term);
+  } else {
+    MAKE_BITSTACK;
+    WTYPE* fv = &(fibm_val[m-2][0]);
+    WTYPE* fs = &(fibm_sum[m-2][0]);
+    int fmax = fibm_max[m-2];
+    int s;
+    WTYPE v;
+
+    s = 1;
+    while ( (s <= fmax) && (value > fs[s]))
+      s++;
+    v = value - fs[s-1] - 1;
+
+    /* Start stack and add the trailing '011' */
+    PUSH_BITSTACK(m+1, term);
+
+    while (s-- > 0) {
+      if (v >= fv[s]) {
+        v -= fv[s];
+        PUSH_BITSTACK(1, W_ONE);
+      } else {
+        PUSH_BITSTACK(1, W_ZERO);
+      }
+    }
+    WRITE_BITSTACK(list);
   }
 }
 
@@ -1008,9 +1221,8 @@ WTYPE get_levenstein (BitList *list)
 
 void put_levenstein (BitList *list, WTYPE value)
 {
-  int   sp = 0;
-  int   stack_b[BIT_STACK_SIZE];
-  WTYPE stack_v[BIT_STACK_SIZE];
+  MAKE_BITSTACK;
+  int ngroups = 1;
 
   if (value == W_ZERO) {
     swrite(list, 1, 0);
@@ -1024,17 +1236,13 @@ void put_levenstein (BitList *list, WTYPE value)
       base++;
     if (base == 0)
       break;
-    assert(sp < BIT_STACK_SIZE);
-    { stack_b[sp] = base; stack_v[sp] = value; sp++; }
+    PUSH_BITSTACK(base, value);
     value = base;
+    ngroups++;
   }
 
-  put_unary1(list, sp+1);
-
-  while (sp > 0) {
-    sp--;
-    swrite(list, stack_b[sp], stack_v[sp]);
-  }
+  put_unary1(list, ngroups);
+  WRITE_BITSTACK(list);
 }
 
 WTYPE get_evenrodeh (BitList *list)
@@ -1065,31 +1273,159 @@ WTYPE get_evenrodeh (BitList *list)
 
 void put_evenrodeh (BitList *list, WTYPE value)
 {
-  int   sp = 0;
-  int   stack_b[BIT_STACK_SIZE];
-  WTYPE stack_v[BIT_STACK_SIZE];
+  MAKE_BITSTACK;
 
   if (value <= W_CONST(3)) {
     swrite(list, 3, value);
     return;
   }
 
-  { stack_b[sp] = 1; stack_v[sp] = 0; sp++; }
+  PUSH_BITSTACK(1, W_ZERO);
 
   while (value > W_CONST(3)) {
     WTYPE v = value;
     int base = 1;
     while ( (v >>= 1) != 0)
       base++;
-    assert(sp < BIT_STACK_SIZE);
-    { stack_b[sp] = base; stack_v[sp] = value; sp++; }
+    PUSH_BITSTACK(base, value);
     value = base;
   }
+  WRITE_BITSTACK(list);
+}
 
-  while (sp > 0) {
-    sp--;
-    swrite(list, stack_b[sp], stack_v[sp]);
+static PrimeArray prime_basis = { 0, 0, 0 };
+
+WTYPE get_goldbach_g1 (BitList *list)
+{
+  int i, j;
+  int pos = list->pos;
+  WTYPE value;
+  assert( pos < list->len );
+
+  i = get_gamma(list);
+  j = get_gamma(list) + i;
+  assert(j >= i);
+  if (prime_basis.curlen <= j) {
+    if (expand_primearray_index(&prime_basis, j) == 0) {
+      list->pos = pos;  /* restore position */
+      croak("code error: Goldbach G1 overflow");
+      return W_ZERO;
+    }
+    prime_basis.array[0] = 1;
   }
+  value = prime_basis.array[i] + prime_basis.array[j];
+  return ((value/2)-1);
+}
+
+void put_goldbach_g1 (BitList *list, WTYPE value)
+{
+  int i, j;
+
+  value = (value+1) * 2;
+  if ((prime_basis.curlen == 0) || (prime_basis.array[prime_basis.curlen-1] < value)) {
+    if (expand_primearray_value(&prime_basis, value) == 0) {
+      croak("code error: Goldbach G1 overflow");
+      return;
+    }
+    prime_basis.array[0] = 1;
+  }
+
+  if (!find_best_pair(prime_basis.array,prime_basis.curlen, value, 0, &i, &j)) {
+    croak("value out of range");
+    return;
+  }
+  put_gamma(list, (WTYPE)i);
+  put_gamma(list, (WTYPE)j);
+}
+
+WTYPE get_goldbach_g2 (BitList *list)
+{
+  int i, j, maxindex;
+  int pos = list->pos;
+  WTYPE look, value;
+  WTYPE subtract = W_ONE;
+  assert( pos < list->len );
+
+  if ( (list->pos + 3) > list->len ) {
+    croak("read off end of stream");
+    return W_ZERO;
+  }
+  look = sreadahead(list, 3);
+  if (look == W_CONST(6)) {  (void) sread(list, 3); return W_ZERO;  }
+  if (look == W_CONST(7)) {  (void) sread(list, 3); return W_ONE;   }
+
+  if (look >= W_CONST(4)) {
+    subtract = W_ZERO;
+    (void) sread(list, 1);
+  }
+
+  i = get_gamma(list);
+  j = get_gamma(list);
+
+  maxindex = (j == 0) ?  i  :  j+(i-1)-1;
+  if (prime_basis.curlen <= maxindex) {
+    if (expand_primearray_index(&prime_basis, maxindex) == 0) {
+      list->pos = pos;  /* restore position */
+      croak("code error: Goldbach G2 overflow");
+      return W_ZERO;
+    }
+    prime_basis.array[0] = 1;
+  }
+
+  if (j == 0) {
+    value = prime_basis.array[i] - subtract;
+  } else {
+    i = i - 1;
+    j = j + i - 1;
+    value = prime_basis.array[i] + prime_basis.array[j] - subtract;
+  }
+  return value;
+}
+
+void put_goldbach_g2 (BitList *list, WTYPE value)
+{
+  int i, j;
+
+  if (value == W_ZERO) { swrite(list, 3, W_CONST(6)); return; }
+  if (value == W_ONE ) { swrite(list, 3, W_CONST(7)); return; }
+
+  /* TODO: encode ~0 */
+  if (value == W_FFFF) {
+    croak("code error: Goldbach G2 overflow");
+    return;
+  }
+  value++;
+  if ((prime_basis.curlen == 0) || (prime_basis.array[prime_basis.curlen-1] < value)) {
+    if (expand_primearray_value(&prime_basis, value) == 0) {
+      croak("code error: Goldbach G2 overflow");
+      return;
+    }
+    prime_basis.array[0] = 1;
+  }
+
+  if ( (value != 2) && is_prime(value) ) {
+    /* find the index for value */
+    int spindex = 0;
+    const WTYPE* parray = prime_basis.array;
+    while (value > parray[spindex]) spindex++;
+    assert(parray[spindex] == value);
+    /* printf("g2 prime: storing %d followed by 1\n", spindex); */
+    put_gamma(list, (WTYPE)spindex);
+    swrite(list, 1, W_ONE);
+    return;
+  }
+  
+  if ((value % 2) == 1) {
+    swrite(list, 1, W_ONE);
+    value--;
+  }
+
+  if (!find_best_pair(prime_basis.array,prime_basis.curlen, value, 1, &i, &j)) {
+    croak("value out of range");
+    return;
+  }
+  put_gamma(list, (WTYPE)i);
+  put_gamma(list, (WTYPE)j);
 }
 
 WTYPE get_binword (BitList *list, int k)
@@ -1172,7 +1508,7 @@ typedef struct {
   WTYPE  t [BITS_PER_WORD / 2];    /* threshold    */
 } bvzeta_map;
 
-bvzeta_map bvzeta_map_cache[16] = {0};
+static bvzeta_map bvzeta_map_cache[16] = {0};
 
 static void bv_make_param_map(int k)
 {
@@ -1263,6 +1599,135 @@ void  put_boldivigna (BitList *list, int k, WTYPE value)
     swrite(list, s-1, x);
   else
     swrite(list, s, x+t);
+}
+
+WTYPE get_comma (BitList *list, int k)
+{
+  WTYPE comma, base, chunk;
+  int pos = list->pos;
+  WTYPE v = 0;
+  assert( list->pos < list->len );
+  assert(k >= 1);
+  assert(k <= 16);
+
+  if (k == 1)  return get_unary(list);
+
+  comma = ~(W_FFFF << k);   /*   000001..1 */
+  base = (1 << k) - 1;
+  while (1) {
+    if ( (list->pos + k) > list->len ) {
+      list->pos = pos;  /* restore position */
+      croak("read off end of stream");
+      return W_ZERO;
+    }
+    chunk = sread(list, k);
+    if (chunk == comma)
+      break;
+    v = base*v + chunk;
+  }
+  return v;
+}
+void  put_comma (BitList *list, int k, WTYPE value)
+{
+  MAKE_BITSTACK;
+  WTYPE comma, base;
+
+  assert(k >= 1);
+  assert(k <= 16);
+
+  if (k == 1)  { put_unary(list, value); return; }
+
+  comma = ~(W_FFFF << k);   /*   000001..1 */
+  base = (1 << k) - 1;
+
+  PUSH_BITSTACK(k, comma);
+
+  while (value > W_ZERO) {
+    WTYPE newval = value / base;
+    PUSH_BITSTACK(k, value - newval*base);
+    value = newval;
+  }
+  WRITE_BITSTACK(list);
+}
+
+WTYPE get_block_taboo (BitList *list, int bits, WTYPE taboo)
+{
+  WTYPE base;
+  WTYPE v = 0;
+  WTYPE basemult = 1;
+  WTYPE baseval = 0;
+  int pos = list->pos;
+  assert( list->pos < list->len );
+  assert( (bits >= 1) && (bits <= 16) );
+
+  if (bits == 1) {
+    return (taboo == 0) ? get_unary1(list) : get_unary(list);
+  }
+
+  base = (1 << bits) - 1;
+  while (1) {
+    WTYPE digit;
+    WTYPE newv;
+    if ( (list->pos + bits) > list->len ) {
+      list->pos = pos;  /* restore position */
+      croak("read off end of stream");
+      return W_ZERO;
+    }
+    digit = sread(list, bits);
+    if (digit == taboo)
+      break;
+    if (digit > taboo)  digit--;
+    newv = base*v + digit;
+    if (newv < v) {
+      list->pos = pos;  /* restore position */
+      croak("code error: Block Taboo overflow");
+      return W_ZERO;
+    }
+    v = newv;
+    baseval += basemult;
+    basemult *= base;
+  }
+  v += baseval;
+  return v;
+}
+void  put_block_taboo (BitList *list, int bits, WTYPE taboo, WTYPE value)
+{
+  MAKE_BITSTACK;
+  WTYPE base, basemult;
+  WTYPE baseval = 1;
+  int nchunks = 1;
+
+  assert( (bits >= 1) && (bits <= 16) );
+
+  if (bits == 1)  {
+    if (taboo == 0)  put_unary1(list, value);
+    else             put_unary(list, value);
+    return;
+  }
+  if (value == 0) {
+    swrite(list, bits, taboo);
+    return;
+  }
+
+  base = (1 << bits) - 1;
+  basemult = base;
+
+  while (value >= (baseval + basemult)) {
+    baseval += basemult;
+    basemult *= base;
+    nchunks++;
+  }
+  value -= baseval;
+
+  PUSH_BITSTACK(bits, taboo);
+
+  while (nchunks-- > 0) {
+    WTYPE digit = value % base;
+    if (digit >= taboo)  digit++;
+    PUSH_BITSTACK(bits, digit);
+    value = value / base;
+  }
+  WRITE_BITSTACK(list);
 }
 
 WTYPE get_rice_sub (BitList *list, SV* self, SV* code, int k)

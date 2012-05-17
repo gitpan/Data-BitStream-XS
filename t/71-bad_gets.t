@@ -6,16 +6,18 @@ use Test::More;
 use Data::BitStream::XS;
 my @encodings = qw|
               Unary Unary1 Gamma Delta Omega
-              Fibonacci EvenRodeh Levenstein
+              Fibonacci FibGen(3) EvenRodeh Levenstein
               Golomb(10) Golomb(16) Golomb(14000)
               Rice(2) Rice(9)
               GammaGolomb(3) GammaGolomb(128) ExpGolomb(5)
               BoldiVigna(2) Baer(0) Baer(-2) Baer(2)
               StartStepStop(3-3-99) StartStop(1-0-1-0-2-12-99)
+              Comma(2) Comma(3)
+              BlockTaboo(11) BlockTaboo(0000)
               ARice(2)
             |;
 
-plan tests => 40 + (1 * scalar @encodings);
+plan tests => 46 + (1 * scalar @encodings);
 
 my $s = Data::BitStream::XS->new;
 my $v;
@@ -27,7 +29,7 @@ my $v;
   $s->erase_for_write;
   $s->write(16, 0);
   $s->rewind_for_read;
-  foreach my $code (qw|Unary Gamma Delta Fibonacci Rice(2) Golomb(10) GammaGolomb(3) ExpGolomb(5) ARice(2) Binword(32)|) {
+  foreach my $code (qw|Unary Gamma Delta Fibonacci Rice(2) Golomb(10) GammaGolomb(3) ExpGolomb(5) ARice(2) Binword(32) Comma(2) BlockTaboo(11)|) {
     # Set position to a little way in
     $s->rewind;  $s->skip(3);  die "Position error" unless $s->pos == 3;
     eval { $s->code_get($code); };
@@ -42,7 +44,7 @@ my $v;
   $s->erase_for_write;
   $s->write(16, 0xFFFFFFFF);
   $s->rewind_for_read;
-  foreach my $code (qw|Unary1 Omega Levenstein Baer(-2)|) {
+  foreach my $code (qw|Unary1 Omega Levenstein Baer(-2) BlockTaboo(000)|) {
     # Set position to a little way in
     $s->rewind;  $s->skip(3);  die "Position error" unless $s->pos == 3;
     eval { $s->code_get($code); };

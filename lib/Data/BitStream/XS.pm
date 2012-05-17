@@ -7,13 +7,13 @@ BEGIN {
   $Data::BitStream::XS::AUTHORITY = 'cpan:DANAJ';
 }
 BEGIN {
-  $Data::BitStream::XS::VERSION = '0.03';
+  $Data::BitStream::XS::VERSION = '0.04';
 }
 
 # parent is cleaner, and in the Perl 5.10.1 / 5.12.0 core, but not earlier.
 # use parent qw( Exporter );
 use base qw( Exporter );
-our @EXPORT_OK = qw( code_is_supported code_is_universal );
+our @EXPORT_OK = qw( code_is_supported code_is_universal is_prime next_prime );
 
 BEGIN {
   eval {
@@ -77,6 +77,8 @@ sub put_stream {
   } else {
     return 0 unless $source->can('to_string');
     $self->put_string($source->to_string);
+    # WordVec is still slow with this (it needs a fast put_raw)
+    # $self->put_raw($source->to_raw, $source->len);
   }
   1;
 }
@@ -238,11 +240,41 @@ my @_initinfo = (
       encodesub => sub {shift->put_levenstein(@_)},
       decodesub => sub {shift->get_levenstein(@_)}, },
     { package   => __PACKAGE__,
+      name      => 'GoldbachG1',
+      universal => 1,
+      params    => 0,
+      encodesub => sub {shift->put_goldbach_g1(@_)},
+      decodesub => sub {shift->get_goldbach_g1(@_)}, },
+    { package   => __PACKAGE__,
+      name      => 'GoldbachG2',
+      universal => 1,
+      params    => 0,
+      encodesub => sub {shift->put_goldbach_g2(@_)},
+      decodesub => sub {shift->get_goldbach_g2(@_)}, },
+    { package   => __PACKAGE__,
       name      => 'Fibonacci',
       universal => 1,
       params    => 0,
       encodesub => sub {shift->put_fib(@_)},
       decodesub => sub {shift->get_fib(@_)}, },
+    { package   => __PACKAGE__,
+      name      => 'FibGen',
+      universal => 1,
+      params    => 1,
+      encodesub => sub {shift->put_fibgen(@_)},
+      decodesub => sub {shift->get_fibgen(@_)}, },
+    { package   => __PACKAGE__,
+      name      => 'Comma',
+      universal => 1,
+      params    => 1,
+      encodesub => sub {shift->put_comma(@_)},
+      decodesub => sub {shift->get_comma(@_)}, },
+    { package   => __PACKAGE__,
+      name      => 'BlockTaboo',
+      universal => 1,
+      params    => 1,
+      encodesub => sub {shift->put_blocktaboo(@_)},
+      decodesub => sub {shift->get_blocktaboo(@_)}, },
     { package   => __PACKAGE__,
       name      => 'Golomb',
       universal => 0,
@@ -268,12 +300,6 @@ my @_initinfo = (
       encodesub => sub {shift->put_gammagolomb(@_)},
       decodesub => sub {shift->get_gammagolomb(@_)}, },
     { package   => __PACKAGE__,
-      name      => 'ARice',
-      universal => 1,
-      params    => 1,
-      encodesub => sub {shift->put_arice(@_)},
-      decodesub => sub {shift->get_arice(@_)}, },
-    { package   => __PACKAGE__,
       name      => 'Baer',
       universal => 1,
       params    => 1,
@@ -285,6 +311,12 @@ my @_initinfo = (
       params    => 1,
       encodesub => sub {shift->put_boldivigna(@_)},
       decodesub => sub {shift->get_boldivigna(@_)}, },
+    { package   => __PACKAGE__,
+      name      => 'ARice',
+      universal => 1,
+      params    => 1,
+      encodesub => sub {shift->put_arice(@_)},
+      decodesub => sub {shift->get_arice(@_)}, },
     { package   => __PACKAGE__,
       name      => 'StartStop',
       universal => 1,
@@ -430,11 +462,11 @@ This code provides a nearly drop-in XS replacement for the L<Data::BitStream>
 module.  If you do not need the flexibility of the Moose/Mouse system, you can
 use this directly.
 
-As of version 0.03, the L<Data::BitStream> class will attempt to use this class
-if it is available.  Most operations will be 50-100 times faster, while not
-sacrificing any of its flexibility, so it is highly recommended.  In other
-words, if this module is installed, any code using L<Data::BitStream> will
-automatically speed up.
+Versions 0.03 and later of the L<Data::BitStream> class will attempt to use
+this XS class if it is available.  Most operations will be 50-100 times faster,
+while not sacrificing any of its flexibility, so it is highly recommended.  In
+other words, if this module is installed, any code using L<Data::BitStream>
+will automatically speed up.
 
 While direct use of the XS class is a bit faster than going through Mouse/Moose,
 the vast majority of the benefit is internal.  Hence, for maximum portability
@@ -785,12 +817,52 @@ Reads/writes one or more values from the stream in Levenstein coding
 
 Reads/writes one or more values from the stream in Even-Rodeh coding.
 
+=item B< get_goldbach_g1([$count]) >
+
+=item B< put_goldbach_g1(@values) >
+
+Reads/writes one or more values from the stream in Goldbach G1 coding.
+
+=item B< get_goldbach_g2([$count]) >
+
+=item B< put_goldbach_g2(@values) >
+
+Reads/writes one or more values from the stream in Goldbach G2 coding.
+
 =item B< get_fib([$count]) >
 
 =item B< put_fib(@values) >
 
 Reads/writes one or more values from the stream in Fibonacci coding.
 Specifically, the order C<m=2> C1 codes of Fraenkel and Klein.
+
+=item B< get_fibgen($m [, $count]) >
+
+=item B< put_fibgen($m, @values) >
+
+Reads/writes one or more values from the stream in generalized Fibonacci
+coding.  The order C<m> should be between 2 and 16.  These codes are
+described in Klein and Ben-Nissan (2004).  For C<m=2> the results are
+identical to the standard C1 form.
+
+=item B< get_comma($bits [, $count]) >
+
+=item B< put_comma($bits, @values) >
+
+Reads/writes one or more values from the stream in Comma coding.  The number
+of bits C<bits> should be between 1 and 16.  C<bits=1> implies Unary coding.
+C<bits=2> is the ternary comma code.  No leading zeros are used.
+
+=item B< get_blocktaboo($taboo [, $count]) >
+
+=item B< put_blocktaboo($taboo, @values) >
+
+Reads/writes one or more values from the stream in block-based Taboo coding.
+The parameter C<taboo> is the binary string of the taboo code to use, such
+as C<'00'>.  C<taboo='1'> implies Unary coding.  C<taboo='0'> implies Unary1
+coding.  No more than 16 bits of taboo code may be given.
+These codes are a more efficient version of comma codes, as they allow
+leading zeros.
 
 =item B< get_golomb($m [, $count]) >
 
@@ -808,7 +880,7 @@ large outliers.  For example to use Fibonacci coding for the base:
 
   $stream->put_golomb( sub {shift->put_fib(@_)}, $m, $value);
 
-  $value = $stream->put_golomb( sub {shift->get_fib(@_)}, $m);
+  $value = $stream->get_golomb( sub {shift->get_fib(@_)}, $m);
 
 =item B< get_rice($k [, $count]) >
 
@@ -827,7 +899,7 @@ large outliers.  For example to use Omega coding for the base:
 
   $stream->put_rice( sub {shift->put_omega(@_)}, $k, $value);
 
-  $value = $stream->put_rice( sub {shift->get_omega(@_)}, $k);
+  $value = $stream->get_rice( sub {shift->get_omega(@_)}, $k);
 
 =item B< get_gammagolomb($m [, $count]) >
 
@@ -842,6 +914,41 @@ Elias Gamma codes for the base.  This is a convenience since they are common.
 
 Reads/writes one or more values from the stream in Rice coding using
 Elias Gamma codes for the base.  This is a convenience since they are common.
+
+=item B< get_baer($k [, $count]) >
+
+=item B< put_baer($k, @values) >
+
+Reads/writes one or more values from the stream in Baer c_k coding.  The
+parameter C<k> must be between C<-32> and C<32>.
+
+=item B< get_boldivigna($k [, $count]) >
+
+=item B< put_boldivigna($k, @values) >
+
+Reads/writes one or more values from the stream in the Zeta coding of
+Paolo Boldi and Sebastiano Vigna.  The parameter C<k> must be between C<1>
+and C<maxbits> (C<32> or C<64>).  Typical values for C<k> are between C<2>
+and C<6>.
+
+=item B< get_arice($k [, $count]) >
+
+=item B< put_arice($k, @values) >
+
+Reads/writes one or more values from the stream in Adaptive Rice coding.
+Technically this is ExpGolomb coding since the default method for encoding
+the base is using the Elias Gamma code.
+The value of $k will adapt to better fit the values.  This interface will
+likely change to make C<$k> a reference.
+
+=item B< get_arice(sub { ... }, $k [, $count]) >
+
+=item B< put_arice(sub { ... }, $k, @values) >
+
+Reads/writes one or more values from the stream in Adaptive Rice coding using
+the supplied subroutine instead of Elias Gamma coding to encode the base.
+The value of $k will adapt to better fit the values.  This interface will
+likely change to make C<$k> a reference.
 
 =item B< get_startstop(\@m [, $count]) >
 
@@ -903,6 +1010,8 @@ etc.
 
 =item L<Data::BitStream::Code::EvenRodeh>
 
+=item L<Data::BitStream::Code::Additive>
+
 =item L<Data::BitStream::Code::Fibonacci>
 
 =item L<Data::BitStream::Code::Golomb>
@@ -919,17 +1028,21 @@ etc.
 
 =item L<Data::BitStream::Code::BoldiVigna>
 
+=item L<Data::BitStream::Code::Comma>
+
+=item L<Data::BitStream::Code::Taboo>
+
 =item L<Data::BitStream::Code::ARice>
 
 =back
 
 =head1 AUTHORS
 
-Dana Jacobsen <dana@acm.org>
+Dana Jacobsen E<lt>dana@acm.orgE<gt>
 
 =head1 COPYRIGHT
 
-Copyright 2011 by Dana Jacobsen <dana@acm.org>
+Copyright 2011-2012 by Dana Jacobsen E<lt>dana@acm.orgE<gt>
 
 This program is free software; you can redistribute it and/or modify it under the same terms as Perl itself.
 

@@ -21,6 +21,35 @@
  */
 #define BLSTGROW 64
 
+static int is_positive_number(const char* str) {
+  int i;
+  int len = strlen(str);
+  if (len == 0)
+    return 0;
+  for (i = 0; i < len; i++) {
+    if (!isdigit(str[i]))
+      return 0;
+  }
+  return 1;
+}
+
+static int parse_binary_string(const char* str, UV* val) {
+  UV v = 0;
+  int i;
+  int len = strlen(str);
+  if (len == 0)
+    return 0;
+  for (i = 0; i < len; i++) {
+    if      (str[i] == '0') { v = 2*v + 0; }
+    else if (str[i] == '1') { v = 2*v + 1; }
+    else                    { return 0; }
+  }
+  if (val != 0)
+    *val = v;
+  return len;
+}
+
+
 /* This is C99, and has to be wrapped in HAS_C99_VARIADIC_MACROS.
  * TODO: Find a non-variadic way to do the same thing.
  */
@@ -62,8 +91,15 @@
       croak("write while reading"); \
     } else { \
       int c = (nargs); \
-      while (++c < items) \
-        put_ ## codename(__VA_ARGS__, SvUV(ST(c))); \
+      STRLEN alen; \
+      while (++c < items) { \
+        SV *sv = ST(c); \
+        if ( !SvOK(sv) ) \
+          croak("value must be >= 0");  /* undef */ \
+        if ( (SvIV(sv) < 0) && !is_positive_number(SvPV(sv, alen)) ) \
+          croak("value must be >= 0");  /* negative number */ \
+        put_ ## codename(__VA_ARGS__, SvUV(sv)); \
+      } \
     }
 
 #define GET_CODE(cn)          GET_CODEVP(cn, 0, list)
@@ -125,6 +161,12 @@ new (IN const char* package, ...)
 
 void
 DESTROY(IN Data::BitStream::XS list)
+
+int
+is_prime(IN UV n)
+
+UV
+next_prime(IN UV n)
 
 int
 maxbits(IN Data::BitStream::XS list = 0)
@@ -236,7 +278,7 @@ read(IN Data::BitStream::XS list, IN int bits, IN const char* flags = 0)
       XSRETURN_UNDEF;
     }
     if ( (bits <= 0) || (bits > BITS_PER_WORD) ) {
-      croak("invalid bits: %d", bits);
+      croak("invalid parameters: bits %d must be 1-%d",bits,(int)BITS_PER_WORD);
       XSRETURN_UNDEF;
     }
     readahead = (flags != 0) && (strcmp(flags, "readahead") == 0);
@@ -260,7 +302,7 @@ readahead(IN Data::BitStream::XS list, IN int bits)
       XSRETURN_UNDEF;
     }
     if ( (bits <= 0) || (bits > BITS_PER_WORD) ) {
-      croak("invalid bits: %d", bits);
+      croak("invalid parameters: bits %d must be 1-%d",bits,(int)BITS_PER_WORD);
       XSRETURN_UNDEF;
     }
     if (list->pos >= list->len)
@@ -277,7 +319,7 @@ write(IN Data::BitStream::XS list, IN int bits, IN UV v)
       XSRETURN_UNDEF;
     }
     if ( (bits <= 0) || ( (v > 1) && (bits > BITS_PER_WORD) ) ) {
-      croak("invalid bits: %d", bits);
+      croak("invalid parameters: bits %d must be 1-%d",bits,(int)BITS_PER_WORD);
       XSRETURN_UNDEF;
     }
     swrite(list, bits, v);
@@ -301,7 +343,7 @@ read_string(IN Data::BitStream::XS list, IN int bits)
     if (list->is_writing)
       { croak("read while writing"); XSRETURN_UNDEF; }
     if (bits < 0)
-      { croak("invalid bits: %d", bits); XSRETURN_UNDEF; }
+      { croak("invalid parameters: bits %d must be >= 0",bits); XSRETURN_UNDEF;}
     if (bits > (list->len - list->pos))
       { croak("short read"); XSRETURN_UNDEF; }
     buf = read_string(list, bits);
@@ -330,6 +372,9 @@ to_raw(IN Data::BitStream::XS list)
     }
   OUTPUT:
     RETVAL
+
+void
+put_raw(IN Data::BitStream::XS list, IN const char* str, IN int bits)
 
 void
 from_raw(IN Data::BitStream::XS list, IN const char* str, IN int bits)
@@ -405,6 +450,24 @@ put_fib(IN Data::BitStream::XS list, ...)
     PUT_CODE(fib);
 
 void
+get_fibgen(IN Data::BitStream::XS list, IN int m, IN int count = 1)
+  PPCODE:
+    if ( (m < 2) || (m > 16) ) {
+      croak("invalid parameters: fibgen %d", m);
+      XSRETURN_UNDEF;
+    }
+    GET_CODEP(fibgen, m);
+
+void
+put_fibgen(IN Data::BitStream::XS list, IN int m, ...)
+  CODE:
+    if ( (m < 2) || (m > 16) ) {
+      croak("invalid parameters: fibgen %d", m);
+      return;
+    }
+    PUT_CODEP(fibgen, m);
+
+void
 get_levenstein(IN Data::BitStream::XS list, IN int count = 1)
   PPCODE:
     GET_CODE(levenstein);
@@ -423,6 +486,26 @@ void
 put_evenrodeh(IN Data::BitStream::XS list, ...)
   CODE:
     PUT_CODE(evenrodeh);
+
+void
+get_goldbach_g1(IN Data::BitStream::XS list, IN int count = 1)
+  PPCODE:
+    GET_CODE(goldbach_g1);
+
+void
+put_goldbach_g1(IN Data::BitStream::XS list, ...)
+  CODE:
+    PUT_CODE(goldbach_g1);
+
+void
+get_goldbach_g2(IN Data::BitStream::XS list, IN int count = 1)
+  PPCODE:
+    GET_CODE(goldbach_g2);
+
+void
+put_goldbach_g2(IN Data::BitStream::XS list, ...)
+  CODE:
+    PUT_CODE(goldbach_g2);
 
 void
 get_binword(IN Data::BitStream::XS list, IN int k, IN int count = 1)
@@ -477,6 +560,51 @@ put_boldivigna(IN Data::BitStream::XS list, IN int k, ...)
       return;
     }
     PUT_CODEP(boldivigna, k);
+
+void
+get_comma(IN Data::BitStream::XS list, IN int k, IN int count = 1)
+  PPCODE:
+    if ( (k < 1) || (k > 16) ) {
+      croak("invalid parameters: comma %d", k);
+      XSRETURN_UNDEF;
+    }
+    GET_CODEP(comma, k);
+
+void
+put_comma(IN Data::BitStream::XS list, IN int k, ...)
+  CODE:
+    if ( (k < 1) || (k > 16) ) {
+      croak("invalid parameters: comma %d", k);
+      return;
+    }
+    PUT_CODEP(comma, k);
+
+void
+get_blocktaboo(IN Data::BitStream::XS list, IN const char* taboostr, IN int count = 1)
+  PREINIT:
+    int k;
+    UV  taboo;
+  PPCODE:
+    k = parse_binary_string(taboostr, &taboo);
+    if ( (k < 1) || (k > 16) ) {
+      croak("invalid parameters: block taboo %s", taboostr);
+      XSRETURN_UNDEF;
+    }
+    GET_CODEPP(block_taboo, k, taboo);
+
+void
+put_blocktaboo(IN Data::BitStream::XS list, IN const char* taboostr, ...)
+  PREINIT:
+    int k;
+    UV  taboo;
+  CODE:
+    k = parse_binary_string(taboostr, &taboo);
+    if ( (k < 1) || (k > 16) ) {
+      croak("invalid parameters: block taboo %s", taboostr);
+      return;
+    }
+    /* We've turned one argument into two */
+    PUT_CODEVP(block_taboo, 1, list, k, taboo);
 
 void
 get_rice_sub(IN Data::BitStream::XS list, IN SV* coderef, IN int k, IN int count = 1)
