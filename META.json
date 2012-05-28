@@ -31,13 +31,17 @@
          }
       },
       "runtime" : {
+         "recommends" : {
+            "Data::BitStream" : "0"
+         },
          "requires" : {
             "Exporter" : "5.562",
             "Test::More" : "0.45",
-            "perl" : "0"
+            "XSLoader" : "0.01",
+            "perl" : "5.006002"
          }
       }
    },
    "release_status" : "stable",
-   "version" : "0.05"
+   "version" : "0.06"
 }

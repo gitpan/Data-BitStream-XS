@@ -3,17 +3,24 @@ package Data::BitStream::XS;
 # Tested on 32-bit big-endian and 64-bit little endian
 use strict;
 use warnings;
+use Carp qw/croak confess/;
+
 BEGIN {
   $Data::BitStream::XS::AUTHORITY = 'cpan:DANAJ';
 }
 BEGIN {
-  $Data::BitStream::XS::VERSION = '0.05';
+  $Data::BitStream::XS::VERSION = '0.06';
 }
 
 # parent is cleaner, and in the Perl 5.10.1 / 5.12.0 core, but not earlier.
 # use parent qw( Exporter );
 use base qw( Exporter );
-our @EXPORT_OK = qw( code_is_supported code_is_universal is_prime next_prime );
+our @EXPORT_OK = qw(
+                     code_is_supported code_is_universal
+                     is_prime  next_prime  primes
+                     prime_count
+                     prime_count_lower  prime_count_upper  prime_count_approx
+                   );
 
 BEGIN {
   eval {
@@ -22,7 +29,7 @@ BEGIN {
     1;
   } or do {
     # We could insert a Pure Perl implementation here.
-    die "XS Code not available";
+    croak "XS Code not available";
   }
 }
 
@@ -32,6 +39,10 @@ BEGIN {
 #
 ################################################################################
 
+sub maxbits {    # Works as a class method or object method
+  my $self = shift;
+  _maxbits();
+}
 sub erase_for_write {
   my $self = shift;
   $self->erase;
@@ -73,7 +84,7 @@ sub put_stream {
 
   if (ref $source eq __PACKAGE__) {
     # optimized method for us.
-    $self->xput_stream($source);
+    $self->_xput_stream($source);
   } else {
     return 0 unless $source->can('to_string');
     $self->put_string($source->to_string);
@@ -92,44 +103,41 @@ sub put_stream {
 sub get_golomb {
   my $self = shift;
   return    (ref $_[0] eq 'CODE')
-         ?  $self->get_golomb_sub(@_)
-         :  $self->get_golomb_sub(undef, @_);
+         ?  $self->_xget_golomb_sub(@_)
+         :  $self->_xget_golomb_sub(undef, @_);
 }
 sub put_golomb {
   my $self = shift;
   return    (ref $_[0] eq 'CODE')
-         ?  $self->put_golomb_sub(@_)
-         :  $self->put_golomb_sub(undef, @_);
+         ?  $self->_xput_golomb_sub(@_)
+         :  $self->_xput_golomb_sub(undef, @_);
 }
 
 sub get_rice {
   my $self = shift;
   return    (ref $_[0] eq 'CODE')
-         ?  $self->get_rice_sub(@_)
-         :  $self->get_rice_sub(undef, @_);
+         ?  $self->_xget_rice_sub(@_)
+         :  $self->_xget_rice_sub(undef, @_);
 }
 sub put_rice {
   my $self = shift;
   return    (ref $_[0] eq 'CODE')
-         ?  $self->put_rice_sub(@_)
-         :  $self->put_rice_sub(undef, @_);
+         ?  $self->_xput_rice_sub(@_)
+         :  $self->_xput_rice_sub(undef, @_);
 }
 
 sub get_arice {
   my $self = shift;
   return    (ref $_[0] eq 'CODE')
-         ?  $self->get_arice_sub(@_)
-         :  $self->get_arice_sub(undef, @_);
+         ?  $self->_xget_arice_sub(@_)
+         :  $self->_xget_arice_sub(undef, @_);
 }
 sub put_arice {
   my $self = shift;
   return    (ref $_[0] eq 'CODE')
-         ?  $self->put_arice_sub(@_)
-         :  $self->put_arice_sub(undef, @_);
+         ?  $self->_xput_arice_sub(@_)
+         :  $self->_xput_arice_sub(undef, @_);
 }
-
-sub get_adaptive_gamma_rice { shift->get_arice(@_); }
-sub put_adaptive_gamma_rice { shift->put_arice(@_); }
 
 
 # Map Start-Step-Stop codes to Start/Stop codes.
@@ -138,9 +146,9 @@ sub put_adaptive_gamma_rice { shift->put_arice(@_); }
 sub _map_sss_to_ss {
   my($start, $step, $stop, $maxstop) = @_;
   $stop = $maxstop if (!defined $stop) || ($stop > $maxstop);
-  die "invalid parameters" unless ($start >= 0) && ($start <= $maxstop);
-  die "invalid parameters" unless $step >= 0;
-  die "invalid parameters" unless $stop >= $start;
+  croak "invalid parameters" unless ($start >= 0) && ($start <= $maxstop);
+  croak "invalid parameters" unless $step >= 0;
+  croak "invalid parameters" unless $stop >= $start;
   return if $start == $stop;  # Binword
   return if $step == 0;       # Rice
 
@@ -157,25 +165,25 @@ sub _map_sss_to_ss {
 sub put_startstepstop {
   my $self = shift;
   my $p = shift;
-  die "invalid parameters" unless (ref $p eq 'ARRAY') && scalar @$p == 3;
+  croak "invalid parameters" unless (ref $p eq 'ARRAY') && scalar @$p == 3;
 
   my($start, $step, $stop) = @$p;
   return $self->put_binword($start, @_) if $start == $stop;
   return $self->put_rice($start, @_)    if $step == 0;
-  my @pmap = _map_sss_to_ss($start, $step, $stop, $self->maxbits);
-  die "unexpected death" unless scalar @pmap >= 2;
+  my @pmap = _map_sss_to_ss($start, $step, $stop, _maxbits());
+  confess "unexpected death" unless scalar @pmap >= 2;
   $self->put_startstop( [@pmap], @_ );
 }
 sub get_startstepstop {
   my $self = shift;
   my $p = shift;
-  die "invalid parameters" unless (ref $p eq 'ARRAY') && scalar @$p == 3;
+  croak "invalid parameters" unless (ref $p eq 'ARRAY') && scalar @$p == 3;
 
   my($start, $step, $stop) = @$p;
   return $self->get_binword($start, @_) if $start == $stop;
   return $self->get_rice($start, @_)    if $step == 0;
-  my @pmap = _map_sss_to_ss($start, $step, $stop, $self->maxbits);
-  die "unexpected death" unless scalar @pmap >= 2;
+  my @pmap = _map_sss_to_ss($start, $step, $stop, _maxbits());
+  confess "unexpected death" unless scalar @pmap >= 2;
   return $self->get_startstop( [@pmap], @_ );
 }
 
@@ -334,45 +342,45 @@ my %codeinfo;
 
 sub add_code {
   my $rinfo = shift;
-  die "add_code needs a hash ref" unless defined $rinfo && ref $rinfo eq 'HASH';
+  croak "add_code needs a hash ref" unless defined $rinfo && ref $rinfo eq 'HASH';
   foreach my $p (qw(package name universal params encodesub decodesub)) {
-    die "invalid registration: missing $p" unless defined $$rinfo{$p};
+    croak "invalid registration: missing $p" unless defined $$rinfo{$p};
   }
   my $name = lc $$rinfo{'name'};
   if (defined $codeinfo{$name}) {
     return 1 if $codeinfo{$name}{'package'} eq $$rinfo{'package'};
-    die "module $$rinfo{'package'} trying to reuse code name '$name' already in use by $codeinfo{$name}{'package'}";
+    croak "module $$rinfo{'package'} trying to reuse code name '$name' already in use by $codeinfo{$name}{'package'}";
   }
   $codeinfo{$name} = $rinfo;
   1;
-}
+};
 
-sub _init_codeinfo {
+my $init_codeinfo_sub = sub {
   if (scalar @_initinfo > 0) {
     foreach my $rinfo (@_initinfo) {
       add_code($rinfo);
     }
     @_initinfo = ();
   }
-}
+};
 
-sub find_code {
+sub _find_code {
   my $code = lc shift;
 
-  _init_codeinfo if scalar @_initinfo > 0;
+  $init_codeinfo_sub->() if scalar @_initinfo > 0;
   return $codeinfo{$code};
-}
+};
 
 sub code_is_supported {
   my $code = lc shift;
   my $param;  $param = $1 if $code =~ s/\((.+)\)$//;
-  return defined find_code($code);
+  return defined _find_code($code);
 }
 
 sub code_is_universal {
   my $code = lc shift;
   my $param;  $param = $1 if $code =~ s/\((.+)\)$//;
-  my $inforef = find_code($code);
+  my $inforef = _find_code($code);
   return unless defined $inforef;  # Unknown code.
   return $inforef->{'universal'};
 }
@@ -386,15 +394,15 @@ sub code_put {
   elsif ($code eq 'gamma' ) { return $self->put_gamma(@_); }
   my $param;  $param = $1 if $code =~ s/\((.+)\)$//;
   my $inforef = $codeinfo{$code};
-  $inforef = find_code($code) unless defined $inforef;
-  die "Unknown code $code" unless defined $inforef;
+  $inforef = _find_code($code) unless defined $inforef;
+  croak "Unknown code $code" unless defined $inforef;
   my $sub = $inforef->{'encodesub'};
-  die "No encoding sub for code $code!" unless defined $sub;
+  croak "No encoding sub for code $code!" unless defined $sub;
   if ($inforef->{'params'}) {
-    die "Code $code needs a parameter" unless defined $param;
+    croak "Code $code needs a parameter" unless defined $param;
     return $sub->($self, $param, @_);
   } else {
-    die "Code $code does not have parameters" if defined $param;
+    croak "Code $code does not have parameters" if defined $param;
     return $sub->($self, @_);
   }
 }
@@ -406,15 +414,15 @@ sub code_get {
   elsif ($code eq 'gamma' ) { return $self->get_gamma(@_); }
   my $param;  $param = $1 if $code =~ s/\((.+)\)$//;
   my $inforef = $codeinfo{$code};
-  $inforef = find_code($code) unless defined $inforef;
-  die "Unknown code $code" unless defined $inforef;
+  $inforef = _find_code($code) unless defined $inforef;
+  croak "Unknown code $code" unless defined $inforef;
   my $sub = $inforef->{'decodesub'};
-  die "No decoding sub for code $code!" unless defined $sub;
+  croak "No decoding sub for code $code!" unless defined $sub;
   if ($inforef->{'params'}) {
-    die "Code $code needs a parameter" unless defined $param;
+    croak "Code $code needs a parameter" unless defined $param;
     return $sub->($self, $param, @_);
   } else {
-    die "Code $code does not have parameters" if defined $param;
+    croak "Code $code does not have parameters" if defined $param;
     return $sub->($self, @_);
   }
 }
@@ -425,6 +433,46 @@ sub code_get {
 #                               CLASS METHODS
 #
 ################################################################################
+
+sub primes {
+  my $optref = {};  $optref = shift if ref $_[0] eq 'HASH';
+  croak "no parameters to primes" unless scalar @_ > 0;
+  croak "too many parameters to primes" unless scalar @_ <= 2;
+  my $start = (@_ == 2)  ?  shift  :  2;
+  my $end = shift;
+  my $sref = [];
+
+  # Validate parameters
+  if ( (!defined $start) || (!defined $end) ||
+       #($start < 0) || ($end < 0) ||
+       ($start =~ tr/0123456789//c) || ($end =~ tr/0123456789//c)
+     ) {
+    croak "Parameters must be positive integers";
+  }
+  return $sref if $start > $end;
+
+  my $method = $optref->{'method'};
+  if (!defined $method) {
+    $method = 'Sieve';
+    if (($start+1) >= $end) { $method = 'Trial'; }
+  }
+
+  if ($method =~ /^Trial$/i) {            # Force trial division
+    $sref = trial_primes($start, $end);
+  } elsif ($method =~ /^Erat\w*$/i) {     # Force full SoE
+    $sref = erat_primes($start, $end);
+  } elsif ($method =~ /^Simple\w*$/i) {   # Force basic SoE
+    $sref = erat_simple_primes($start, $end);
+  } elsif ($method =~ /^Sieve$/i) {
+    # Do a smart cached thing (typically sieving).
+    $sref = sieve_primes($start, $end);
+  } else {
+    croak "Unknown prime method: $method";
+  }
+  #return (wantarray) ? @{$sref} : $sref;
+  return $sref;
+}
+
 
 1;
 
@@ -448,6 +496,9 @@ Data::BitStream::XS - A bit stream class including integer coding methods
   my @values = $stream->get_gamma(-1);
 
 See L<Data::BitStream> for more examples.
+
+
+
 
 =head1 DESCRIPTION
 
@@ -473,7 +524,13 @@ the vast majority of the benefit is internal.  Hence, for maximum portability
 and flexibility just install this module for the speed, and continue using the
 L<Data::BitStream> class as usual.
 
+
+
+
 =head1 METHODS
+
+
+
 
 =head2 CLASS METHODS
 
@@ -556,7 +613,36 @@ store value C<k>.  This is very good if most values are 0 or near zero.  If
 we have rare values in the tens of thousands, it's not so great.  It is
 likely to be fatal if we ever come across a value of 2 billion.
 
+=item B< add_code >
+
+Used for the dispatch table methods C<code_put> and C<code_get> as well as
+other helper methods like C<code_is_universal> and C<code_is_supported>.
+This is typically handled internally, but can be used to register a new code
+or variant.  An example of an Omega-Golomb code:
+
+   Data::BitStream::XS::add_code(
+      { package   => __PACKAGE__,
+        name      => 'OmegaGolomb',
+        universal => 1,
+        params    => 1,
+        encodesub => sub {shift->put_golomb( sub {shift->put_omega(@_)}, @_ )},
+        decodesub => sub {shift->get_golomb( sub {shift->get_omega(@_)}, @_ )},
+      }
+   );
+
+which registers the name C<OmegaGolomb> as a new universal code that takes
+one parameter.  Given a stream C<$stream>, this is now allowed:
+
+   $stream->erase_for_write;
+   $stream->code_put("OmegaGolomb(5)", 477);
+   $stream->rewind_for_read;
+   my $value = $stream->code_get("OmegaGolomb(5)");
+   die unless $value == 477;
+
 =back
+
+
+
 
 =head2 OBJECT METHODS (I<reading>)
 
@@ -583,6 +669,14 @@ Attempting to read past the end of the stream is a fatal error.  However,
 readahead is allowed as it is speculative.  All positions past the end of
 the stream will always be filled with zero bits.
 
+=item B< readahead($bits>) >
+
+Identical to calling read with 'readahead' as the second argument.
+Returns the value of the next C<$bits> bits (between C<1> and C<maxbits>).
+Returns undef if the current position is at the end.
+Allows reading past the end of the stream (fills with zeros as necessary).
+Does not advance the position.
+
 =item B< skip($bits) >
 
 Advances the position C<$bits> bits.  Used in conjunction with C<readahead>.
@@ -596,6 +690,9 @@ as C<'0011011'>.  Attempting to read past the end of the stream is a fatal
 error.
 
 =back
+
+
+
 
 =head2 OBJECT METHODS (I<writing>)
 
@@ -628,7 +725,16 @@ possible ways.  The default implementation uses:
 
   $self->put_string( $source_stream->to_string );
 
+=item B< put_raw($packed, [, $bits]) >
+
+Writes the packed big-endian vector C<$packed> which has C<$bits> bits of data.
+If C<$bits> is not present, then C<length($packed)> will be used as the
+byte-length.  It is recommended that you include C<$bits>.
+
 =back
+
+
+
 
 =head2 OBJECT METHODS (I<conversion>)
 
@@ -667,6 +773,9 @@ will be used as the byte-length.  It is recommended that you include C<$bits>.
 Similar to C<from_raw>, but using the value returned by C<to_store>.
 
 =back
+
+
+
 
 =head2 OBJECT METHODS (I<other>)
 
@@ -716,6 +825,10 @@ can be helpful in catching mistakes such as reading from a target stream.
 Erases all the data, while the writing state is left unchanged.  The position
 and length will both be 0 after this is finished.
 
+=item B< read_open >
+
+Reads the current input file, if one exists.
+
 =item B< write_open >
 
 Changes the state to writing with no other API-visible changes.
@@ -742,6 +855,9 @@ Unfortunately it isn't completely generic, as it assumes a fixed number of
 lines.  An alternative API would be to have a user supplied sub.
 
 =back
+
+
+
 
 =head2 OBJECT METHODS (I<coding>)
 
@@ -908,12 +1024,25 @@ large outliers.  For example to use Omega coding for the base:
 Reads/writes one or more values from the stream in Golomb coding using
 Elias Gamma codes for the base.  This is a convenience since they are common.
 
+=item B< get_gamma_golomb($m [, $count]) >
+
+=item B< put_gamma_golomb($m, @values) >
+
+Aliases for C<get_gammagolomb> and C<put_gammagolomb>.
+
 =item B< get_expgolomb($k [, $count]) >
 
 =item B< put_expgolomb($k, @values) >
 
 Reads/writes one or more values from the stream in Rice coding using
 Elias Gamma codes for the base.  This is a convenience since they are common.
+
+=item B< get_gamma_rice($k [, $count]) >
+
+=item B< put_gamma_rice($k, @values) >
+
+Aliases for C<get_expgolomb> and C<put_expgolomb>.  This name better describes
+the algorithm, but is not in common use.
 
 =item B< get_baer($k [, $count]) >
 
@@ -990,6 +1119,129 @@ etc.
 
 =back
 
+
+
+=head2 SEQUENCE METHODS (I<class methods>)
+
+These methods are exported to allow testing, and because they may be of some
+use for callers.  They are not directly related.
+
+=over 4
+
+
+=item B<is_prime($n)>
+
+Given an unsigned integer C<n>, returns 0 if the number is not prime, 1 if it
+is prime.  The algorithm currently used is trial division.  Speed is
+approximately equal to the code used by L<Math::Prime::XS> version 0.26
+(the algorithms are identical).  The algorithm may be changed.
+
+
+=item B<next_prime($n)>
+
+Given an unsigned integer C<n>, returns the next prime number.  This is
+accomplished by trying C<is_prime> each number greater than C<n> (skipping
+multiples of 2, 3, and 5) until a prime is found.  No memory is used during
+the process.  The number returned will always be greater than C<n>, barring
+any possibility of unsigned long overflow.
+
+Note that the sequence of primes starts with 2, 3, 5, 7, ...
+
+
+=item B<primes($high)>
+
+=item B<primes($low, $high)>
+
+Returns a reference to an array of all primes in the range C<low> to C<high>
+inclusive, with C<low> being 2 if not given.  The algorithm used is subject
+to change and may be dynamic depending on the range.  This will do caching
+so successive calls within the range will be faster.
+
+At this time, it is the fastest prime generator on CPAN to my knowledge, and
+will use less memory for sieving.  For sieving the first primes below C<10^10>
+(10 billion), it is about 2.5x faster than L<Math::Prime::FastSieve> 0.10,
+and over 10x faster than L<Math::Prime::XS>.  Substantial performance
+improvements remain possible in both speed and space.  Note also that for
+small numbers, e.g. less than C<10^6> (1 million), the difference is
+1.1x - 1.5x at most, and it really doesn't matter which you use.
+
+=item B<primes({method=>$method}, $low, $high)>
+
+An optional set of options can be given to the primes function as a hash
+reference in the first parameter.  Currently only C<method> is used, and
+possible values are:
+
+  C<Sieve>    Cached sieve (whatever is most efficient)
+  C<Erat>     Uncached efficient Sieve of Eratosthenes
+  C<Simple>   Uncached simple Sieve of Eratosthenes
+  C<Trial>    Uncached trial division.
+
+The default method is either C<Trial> or C<Sieve> depending on the range.  A
+future version will include C<Segment> as an option.
+
+
+=item B<prime_init($n)>
+
+Precalculates anything necessary to do fast calls for sieving within the range
+up to C<n>.  Not necessary, but very helpful if doing repeated calls to methods
+like C<is_prime>, C<prime_count>, and C<primes> with increasing C<n>.
+
+
+=item B<prime_count($n)>
+
+Returns the Prime Count function C<Pi(n)>.  The current implementation relies
+on sieving to find the primes within the interval, so will take some time and
+memory.  There are slightly faster ways to handle the sieving (e.g. maintain
+a list of counts from C<2 - j> for various C<j>, then do a segmented sieve
+between C<j> and C<n>), and for very large numbers the methods of Meissel,
+Lehmer, or Lagarias-Miller-Odlyzko-Deleglise-Rivat may be appropriate.
+
+
+=item B<prime_count_upper($n)>
+
+=item B<prime_count_lower($n)>
+
+Return bounds on the upper and lower limits, respectively, for the Prime
+Count function C<Pi(n)>.  These estimates should be very good for numbers
+under 2^32, but over that they fall back to the proven Dusart bounds of
+
+    x/logx * (1 + 1/logx + 1.80/log^2x) <= Pi(x)
+
+    x/logx * (1 + 1/logx + 2.51/log^2x) >= Pi(x)
+
+which are looser than the trial-verified values, but much, much, much
+better than simple bounds such as
+
+    x/logx <= Pi(x) <= 1.25506x/logx
+
+shown on the Wikipedia Prime-counting function page.
+
+
+=item B<prime_count_approx($n)>
+
+Returns an approximation to the Prime Count function C<Pi(n)>.  Currently this
+is just an average of the upper and lower bounds, but note that this is within
+C<9> for all C<n E<lt> 15_809> and within C<50> for all C<n E<lt> 1_763_367>.
+
+
+
+=item B<sieve_primes>
+
+=item B<erat_primes>
+
+=item B<erat_simple_primes>
+
+=item B<trial_primes>
+
+Methods for specific sieving: cached efficient sieve, efficient Sieve of
+Eratosthenes, simple Sieve of Eratosthenes, and trial division.  These may
+disappear in a future version, so use the C<method> argument to C<primes>
+instead.
+
+=back
+
+
+
 =head1 SEE ALSO
 
 =over 4
@@ -1036,9 +1288,15 @@ etc.
 
 =back
 
+
+
+
 =head1 AUTHORS
 
 Dana Jacobsen E<lt>dana@acm.orgE<gt>
+
+
+
 
 =head1 COPYRIGHT
 

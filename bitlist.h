@@ -10,11 +10,6 @@
 
 #include "wtype.h"
 
-#define BITS_PER_WORD (8 * sizeof(WTYPE))
-#define MAXBIT        (BITS_PER_WORD-1)
-#define NWORDS(bits)  ( ((bits)+BITS_PER_WORD-1) / BITS_PER_WORD )
-#define NBYTES(bits)  ( ((bits)+8-1) / 8 )
-
 typedef enum
 {
    eModeR,
@@ -68,7 +63,7 @@ extern char*     to_raw         (BitList *l);
 extern void      from_raw       (BitList *l, const char* str, int bits);
 
 /* src ought to be const, but we're going to call write_close() on it */
-extern void      xput_stream    (BitList *l, BitList *s);
+extern void      _xput_stream    (BitList *l, BitList *s);
 
 extern WTYPE     get_unary      (BitList *l);
 extern WTYPE     get_unary1     (BitList *l);
@@ -90,7 +85,7 @@ extern WTYPE     get_rice_sub   (BitList *l, SV* self, SV* code, int k);
 extern WTYPE     get_golomb_sub (BitList *l, SV* self, SV* code, WTYPE m);
 extern WTYPE     get_gamma_rice (BitList *l, int k);
 extern WTYPE     get_gamma_golomb (BitList *l, WTYPE m);
-extern WTYPE     get_adaptive_gamma_rice_sub (BitList *l, SV* self, SV* code, int *k);
+extern WTYPE     get_adaptive_rice_sub (BitList *l, SV* self, SV* code, int *k);
 extern WTYPE     get_startstop  (BitList *l, const char* cmap);
 
 extern void      put_unary      (BitList *l, WTYPE value);
@@ -113,7 +108,7 @@ extern void      put_rice_sub   (BitList *l, SV* self, SV* code, int k, WTYPE va
 extern void      put_golomb_sub (BitList *l, SV* self, SV* code, WTYPE m, WTYPE value);
 extern void      put_gamma_rice (BitList *l, int k, WTYPE value);
 extern void      put_gamma_golomb (BitList *l, WTYPE m, WTYPE value);
-extern void      put_adaptive_gamma_rice_sub (BitList *l, SV* self, SV* code, int *k, WTYPE value);
+extern void      put_adaptive_rice_sub (BitList *l, SV* self, SV* code, int *k, WTYPE value);
 extern void      put_startstop  (BitList *l, const char* cmap, WTYPE value);
 
 extern char*     make_startstop_prefix_map(SV* paramref);

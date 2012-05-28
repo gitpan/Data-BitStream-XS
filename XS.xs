@@ -4,6 +4,7 @@
 #include "XSUB.h"
 /* We're not using anything for which we need ppport.h */
 #include "bitlist.h"
+#include "sequences.h"
 
 #define CHECKPOS \
   if (list->pos >= list->len) \
@@ -22,8 +23,8 @@
 #define BLSTGROW 64
 
 static int is_positive_number(const char* str) {
-  int i;
-  int len = strlen(str);
+  size_t i;
+  size_t len = strlen(str);
   if (len == 0)
     return 0;
   for (i = 0; i < len; i++) {
@@ -35,8 +36,8 @@ static int is_positive_number(const char* str) {
 
 static int parse_binary_string(const char* str, UV* val) {
   UV v = 0;
-  int i;
-  int len = strlen(str);
+  size_t i;
+  size_t len = strlen(str);
   if (len == 0)
     return 0;
   for (i = 0; i < len; i++) {
@@ -163,13 +164,7 @@ void
 DESTROY(IN Data::BitStream::XS list)
 
 int
-is_prime(IN UV n)
-
-UV
-next_prime(IN UV n)
-
-int
-maxbits(IN Data::BitStream::XS list = 0)
+_maxbits()
   CODE:
     RETVAL = BITS_PER_WORD;
   OUTPUT:
@@ -380,12 +375,12 @@ void
 from_raw(IN Data::BitStream::XS list, IN const char* str, IN int bits)
 
 void
-xput_stream(IN Data::BitStream::XS list, IN Data::BitStream::XS source)
+_xput_stream(IN Data::BitStream::XS list, IN Data::BitStream::XS source)
   CODE:
     if (!list->is_writing) {
       croak("write while reading");
     } else {
-      xput_stream(list, source);
+      _xput_stream(list, source);
     }
 
 
@@ -607,7 +602,7 @@ put_blocktaboo(IN Data::BitStream::XS list, IN const char* taboostr, ...)
     PUT_CODEVP(block_taboo, 1, list, k, taboo);
 
 void
-get_rice_sub(IN Data::BitStream::XS list, IN SV* coderef, IN int k, IN int count = 1)
+_xget_rice_sub(IN Data::BitStream::XS list, IN SV* coderef, IN int k, IN int count = 1)
   PREINIT:
     SV* self = ST(0);
     SV* cref = 0;
@@ -629,7 +624,7 @@ get_rice_sub(IN Data::BitStream::XS list, IN SV* coderef, IN int k, IN int count
     GET_CODESPP(rice_sub, self, cref, k);
 
 void
-put_rice_sub(IN Data::BitStream::XS list, IN SV* coderef, IN int k, ...)
+_xput_rice_sub(IN Data::BitStream::XS list, IN SV* coderef, IN int k, ...)
   PREINIT:
     SV* self = ST(0);
     SV* cref = 0;
@@ -673,7 +668,7 @@ put_gamma_rice(IN Data::BitStream::XS list, IN int k, ...)
     PUT_CODEP(gamma_rice, k);
 
 void
-get_golomb_sub(IN Data::BitStream::XS list, IN SV* coderef, IN UV m, IN int count = 1)
+_xget_golomb_sub(IN Data::BitStream::XS list, IN SV* coderef, IN UV m, IN int count = 1)
   PREINIT:
     SV* self = ST(0);
     SV* cref = 0;
@@ -695,7 +690,7 @@ get_golomb_sub(IN Data::BitStream::XS list, IN SV* coderef, IN UV m, IN int coun
     GET_CODESPP(golomb_sub, self, cref, m);
 
 void
-put_golomb_sub(IN Data::BitStream::XS list, IN SV* coderef, IN UV m, ...)
+_xput_golomb_sub(IN Data::BitStream::XS list, IN SV* coderef, IN UV m, ...)
   PREINIT:
     SV* self = ST(0);
     SV* cref = 0;
@@ -740,7 +735,7 @@ put_gamma_golomb(IN Data::BitStream::XS list, IN UV m, ...)
     PUT_CODEP(gamma_golomb, m);
 
 void
-get_arice_sub(list, coderef, k, count=1)
+_xget_arice_sub(list, coderef, k, count=1)
       Data::BitStream::XS list
       SV* coderef
       int &k
@@ -751,7 +746,7 @@ get_arice_sub(list, coderef, k, count=1)
     SV* stack_k_ptr = ST(2);  /* Remember position of k, it will be modified */
   PPCODE:
     if ( (k < 0) || (k > BITS_PER_WORD) ) {
-      croak("invalid parameters: adaptive_gamma_rice %d", k);
+      croak("invalid parameters: adaptive_rice %d", k);
       XSRETURN_UNDEF;
     }
     if (!SvROK(coderef)) {
@@ -759,18 +754,18 @@ get_arice_sub(list, coderef, k, count=1)
       cref = 0;
     } else {
       if ((!SvROK(coderef)) || (SvTYPE(SvRV(coderef)) != SVt_PVCV) ) {
-        croak("invalid parameters: adaptive_gamma_rice coderef");
+        croak("invalid parameters: adaptive_rice coderef");
         return;
       }
       cref = SvRV(coderef);
     }
-    GET_CODESPP(adaptive_gamma_rice_sub, self, cref, &k);
+    GET_CODESPP(adaptive_rice_sub, self, cref, &k);
     /* Return the modified k back to Perl */
     sv_setiv(stack_k_ptr, k);
     SvSETMAGIC(stack_k_ptr);
 
 void
-put_arice_sub(list, coderef, k, ...)
+_xput_arice_sub(list, coderef, k, ...)
       Data::BitStream::XS list
       SV* coderef
       int &k
@@ -779,7 +774,7 @@ put_arice_sub(list, coderef, k, ...)
     SV* cref = 0;
   CODE:
     if ( (k < 0) || (k > BITS_PER_WORD) ) {
-      croak("invalid parameters: adaptive_gamma_rice %d", k);
+      croak("invalid parameters: adaptive_rice %d", k);
       return;
     }
     if (!SvROK(coderef)) {
@@ -787,12 +782,12 @@ put_arice_sub(list, coderef, k, ...)
       cref = 0;
     } else {
       if ((!SvROK(coderef)) || (SvTYPE(SvRV(coderef)) != SVt_PVCV) ) {
-        croak("invalid parameters: adaptive_gamma_rice coderef");
+        croak("invalid parameters: adaptive_rice coderef");
         return;
       }
       cref = SvRV(coderef);
     }
-    PUT_CODESPP(adaptive_gamma_rice_sub, self, cref, &k);
+    PUT_CODESPP(adaptive_rice_sub, self, cref, &k);
   OUTPUT:
     k
 
@@ -820,3 +815,125 @@ put_startstop(IN Data::BitStream::XS list, IN SV* p, ...)
        return;
     PUT_CODEVP(startstop, 1, list, map);
     free(map);
+
+
+
+
+void
+prime_init(IN UV n)
+
+UV
+prime_count(IN UV n)
+
+UV
+prime_count_lower(IN UV n)
+
+UV
+prime_count_upper(IN UV n)
+
+UV
+prime_count_approx(IN UV n)
+
+int
+is_prime(IN UV n)
+
+UV
+next_prime(IN UV n)
+
+
+SV*
+sieve_primes(IN UV low, IN UV high)
+  PREINIT:
+    WTYPE  s;
+    const unsigned char* sieve;
+    AV* av = newAV();
+  CODE:
+    if (low <= high) {
+      if (get_prime_cache(high, &sieve) < high) {
+        croak("Could not generate sieve for %ld", high);
+      } else {
+        if ((low <= 2) && (high >= 2)) { av_push(av, newSVuv( 2 )); }
+        if ((low <= 3) && (high >= 3)) { av_push(av, newSVuv( 3 )); }
+        if ((low <= 5) && (high >= 5)) { av_push(av, newSVuv( 5 )); }
+        if (low < 7) { low = 7; }
+        START_DO_FOR_EACH_SIEVE_PRIME( sieve, low, high ) {
+           av_push(av,newSVuv(p));
+        } END_DO_FOR_EACH_SIEVE_PRIME
+      }
+    }
+    RETVAL = newRV_noinc( (SV*) av );
+  OUTPUT:
+    RETVAL
+
+
+SV*
+trial_primes(IN UV low, IN UV high)
+  PREINIT:
+    WTYPE  curprime;
+    AV* av = newAV();
+  CODE:
+    if (low <= high) {
+      if (low >= 2) low--;   /* Make sure low gets included */
+      curprime = next_trial_prime(low);
+      while (curprime <= high) {
+        av_push(av,newSVuv(curprime));
+        curprime = next_trial_prime(curprime);
+      }
+    }
+    RETVAL = newRV_noinc( (SV*) av );
+  OUTPUT:
+    RETVAL
+
+
+SV*
+erat_primes(IN UV low, IN UV high)
+  PREINIT:
+    unsigned char* sieve;
+    AV* av = newAV();
+  CODE:
+    if (low <= high) {
+      sieve = sieve_erat30(high);
+      if (sieve == 0) {
+        croak("Could not generate sieve for %ld", high);
+      } else {
+        if ((low <= 2) && (high >= 2)) { av_push(av, newSVuv( 2 )); }
+        if ((low <= 3) && (high >= 3)) { av_push(av, newSVuv( 3 )); }
+        if ((low <= 5) && (high >= 5)) { av_push(av, newSVuv( 5 )); }
+        if (low < 7) { low = 7; }
+        START_DO_FOR_EACH_SIEVE_PRIME( sieve, low, high ) {
+           av_push(av,newSVuv(p));
+        } END_DO_FOR_EACH_SIEVE_PRIME
+        free(sieve);
+      }
+    }
+    RETVAL = newRV_noinc( (SV*) av );
+  OUTPUT:
+    RETVAL
+
+
+SV*
+erat_simple_primes(IN UV low, IN UV high)
+  PREINIT:
+    WTYPE* sieve;
+    WTYPE s;
+    AV* av = newAV();
+  CODE:
+    if (low <= high) {
+      sieve = sieve_erat(high);
+      if (sieve == 0) {
+        croak("Could not generate sieve for %ld", high);
+      } else {
+        if (low <= 2) { av_push(av, newSVuv( 2 )); low = 3; }
+        low  = low/2;
+        high = (high-1)/2;
+        for (s = low; s <= high; s++) {
+          if ( ! IS_SET_ARRAY_BIT(sieve, s) ) {
+            av_push(av,newSVuv( 2*s+1 ));
+          }
+        }
+        free(sieve);
+      }
+    }
+    RETVAL = newRV_noinc( (SV*) av );
+  OUTPUT:
+    RETVAL

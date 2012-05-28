@@ -64,9 +64,11 @@ t/90-release-perlcritic.t
 t/91-release-pod-syntax.t
 t/92-release-pod-coverage.t
 examples/bench-codes.pl
+examples/bench-prime-gen.pl
 examples/code-table.pl
 examples/imcomp.pl
 examples/integercoding.pl
+examples/prime_sieves.c
 examples/rand-geo.pl
 examples/test-ic.pl
 META.yml                                 Module YAML meta-data (added by MakeMaker)

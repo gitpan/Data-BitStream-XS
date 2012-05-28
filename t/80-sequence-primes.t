@@ -3,11 +3,17 @@ use strict;
 use warnings;
 
 use Test::More;
-use Data::BitStream::XS qw(is_prime next_prime);
+use Data::BitStream::XS qw(is_prime next_prime primes primes prime_count prime_count_lower prime_count_upper prime_count_approx);
 
-plan tests => 3645 + 499;
+my $use64 = Data::BitStream::XS->maxbits > 32;
+my $extra = defined $ENV{RELEASE_TESTING} && $ENV{RELEASE_TESTING};
 
-# Tests duplicated from Math::Primality.
+plan tests => 6 + 19 + 3573 + (5 + 29 + 22 + 23 + 16) + 499 + 4*12+1+1
+              + 10*3+7
+              + ($use64 ? 5 + 9*2 : 0)
+              + ($extra ? 3 : 0);
+
+# These simple prime tests mostly taken from from Math::Primality.
 
 ok( is_prime(2), '2 is prime');
 ok(!is_prime(1), '1 is not prime');
@@ -60,31 +66,96 @@ foreach my $n (0 .. 3572) {
   }
 }
 
-my @carmichael = qw/561 1105 1729 2465 2821 6601 8911
-10585 15841 29341 41041 46657 52633
-62745 63973 75361 101101
-999838193331601
-999840927672001
-999851057445241
-999878556600001
-999885684921481
-999895175363161
-999902676805201
-999907821232321
-999919121100481
-999922265173441
-/;
-map { ok(!is_prime($_), "Carmichael Number $_ is not prime") } @carmichael;
+map { ok(!is_prime($_), "A006945 number $_ is not prime") }
+  qw/9 2047 1373653 25326001 3215031751/;
+map { ok(!is_prime($_), "A006945 number $_ is not prime") }
+  qw/2152302898747 3474749660383 341550071728321 341550071728321 3825123056546413051/ if $use64;
 
-map { ok(!is_prime($_), "Pseudoprime (base 2) $_ is not prime" ) } qw/
-341 561 645 1105 1387 1729 1905 2047
-2465 2701 2821 3277 4033 4369 4371
-4681 5461 6601 7957 8321
-/;
+map { ok(!is_prime($_), "Carmichael Number $_ is not prime") }
+  qw/561 1105 1729 2465 2821 6601 8911 10585 15841 29341 41041 46657 52633
+     62745 63973 75361 101101 340561 488881 852841 1857241 6733693
+     9439201 17236801 23382529 34657141 56052361 146843929 216821881/;
 
+map { ok(!is_prime($_), "Pseudoprime (base 2) $_ is not prime" ) }
+  qw/341 561 645 1105 1387 1729 1905 2047 2465 2701 2821 3277 4033 4369 4371
+     4681 5461 6601 7957 8321 52633 88357/;
+
+map { ok(!is_prime($_), "Pseudoprime (base 3) $_ is not prime" ) }
+  qw/121 703 1891 3281 8401 8911 10585 12403 16531 18721 19345 23521 31621
+     44287 47197 55969 63139 74593 79003 82513 87913 88573 97567/;
+
+map { ok(!is_prime($_), "Pseudoprime (base 5) $_ is not prime" ) }
+  qw/781 1541 5461 5611 7813 13021 14981 15751 24211 25351 29539 38081
+     40501 44801 53971 79381/;
+
+# End of tests derived from Math::Primality test ideas
 
 # Next prime
 for (my $i = 0; $i < (scalar @small_primes) - 1; $i++) {
   my $n = next_prime($small_primes[$i]);
   is("$n", "$small_primes[$i+1]", "the next prime after $small_primes[$i] is $small_primes[$i+1] ?= $n");
+}
+
+# Ranges
+foreach my $method (qw/trial erat simple sieve/) {
+  is_deeply( primes({method=>$method}, 0, 3572), \@small_primes, "Primes between 0 and 3572" );
+  is_deeply( primes({method=>$method}, 2, 20), [2,3,5,7,11,13,17,19], "Primes between 2 and 20" );
+  is_deeply( primes({method=>$method}, 30, 70), [31,37,41,43,47,53,59,61,67], "Primes between 30 and 70" );
+  is_deeply( primes({method=>$method}, 30, 70), [31,37,41,43,47,53,59,61,67], "Primes between 30 and 70" );
+  is_deeply( primes({method=>$method}, 20, 2), [], "Primes between 20 and 2" );
+  is_deeply( primes({method=>$method}, 2, 2), [2], "Primes ($method) between 2 and 2" );
+  is_deeply( primes({method=>$method}, 3, 3), [3], "Primes between 3 and 3" );
+  is_deeply( primes({method=>$method}, 2010733, 2010733+148), [2010733,2010733+148], "Primegap 21 inclusive" );
+  is_deeply( primes({method=>$method}, 2010733+1, 2010733+148-2), [], "Primegap 21 exclusive" );
+  is_deeply( primes({method=>$method}, 3088, 3164), [3089,3109,3119,3121,3137,3163], "Primes between 3088 and 3164" );
+  is_deeply( primes({method=>$method}, 3089, 3163), [3089,3109,3119,3121,3137,3163], "Primes between 3089 and 3163" );
+  is_deeply( primes({method=>$method}, 3090, 3162), [3109,3119,3121,3137], "Primes between 3090 and 3162" );
+}
+
+# Compare the two sieves
+is_deeply( primes({method=>'erat'}, 0, 1000000), primes({method=>'simpleerat'}, 0, 1000000), "Compare sieves" );
+
+# Large 32-bit gap using trial
+is_deeply( primes({method=>'trial'}, 3842610773, 3842610773+336), [3842610773,3842610773+336], "Primegap 34 inclusive" );
+
+
+# Prime counts
+my %pivals32 = (
+                  1 => 0,
+                 10 => 4,
+                100 => 25,
+               1000 => 168,
+              10000 => 1229,
+             100000 => 9592,
+            1000000 => 78498,
+           10000000 => 664579,
+          100000000 => 5761455,
+         1000000000 => 50847534,
+);
+my %pivals64 = (
+        10000000000 => 455052511,
+       100000000000 => 4118054813,
+      1000000000000 => 37607912018,
+     10000000000000 => 346065536839,
+    100000000000000 => 3204941750802,
+   1000000000000000 => 29844570422669,
+  10000000000000000 => 279238341033925,
+ 100000000000000000 => 2623557157654233,
+1000000000000000000 => 24739954287740860,
+);
+while (my($n, $pin) = each (%pivals32)) {
+  cmp_ok( prime_count_upper($n), '>=', $pin, "Pi($n) <= upper estimate" );
+  cmp_ok( prime_count_lower($n), '<=', $pin, "Pi($n) >= lower estimate" );
+  if ( ($n <= 2000000) || $extra ) {
+    is( prime_count($n), $pin, "Pi($n) = $pin" );
+  }
+  my $approx_range = abs($pin - prime_count_approx($n));
+  my $range_limit = 1100;
+  cmp_ok( $approx_range, '<=', $range_limit, "prime_count_approx($n) within $range_limit");
+}
+if ($use64) {
+  while (my($n, $pin) = each (%pivals64)) {
+    cmp_ok( prime_count_upper($n), '>=', $pin, "Pi($n) <= upper estimate" );
+    cmp_ok( prime_count_lower($n), '<=', $pin, "Pi($n) >= lower estimate" );
+  }
 }

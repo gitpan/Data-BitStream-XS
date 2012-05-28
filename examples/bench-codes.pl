@@ -45,10 +45,9 @@ my @encodings;
   Comma(3)
   BlockTaboo(00)
   BlockTaboo(010)
-  GoldbachG1
   BinWord(20)
 |;
-@encodings = qw|Gamma Delta Omega Fibonacci Baer(-1) GoldbachG1|;
+@encodings = qw|Gamma Delta Omega Fibonacci Baer(-1)|;
 
 my $list_n = 2048;
 my @list_small;

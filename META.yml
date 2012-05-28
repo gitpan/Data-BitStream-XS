@@ -17,8 +17,11 @@ no_index:
   directory:
     - t
     - inc
+recommends:
+  Data::BitStream: 0
 requires:
   Exporter: 5.562
   Test::More: 0.45
-  perl: 0
-version: 0.05
+  XSLoader: 0.01
+  perl: 5.006002
+version: 0.06
