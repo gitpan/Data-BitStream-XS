@@ -22,15 +22,37 @@ if ($test eq 'lb') {
   @kl = (1,10,100);    # Test 2 to 1000, 1001 to 10000, 10001 to 100000
 }
 
-# Here's a simple test:
-#  >1 hr  time perl -E 'use Math::Primality qw/prime_count/; say prime_count(800_000_000);'
-#  16.2s  time perl -E 'use Math::Prime::XS qw/primes/; my @primes = primes(2,800_000_000); say scalar @primes;'
-#   3.9s  time perl -E 'use Math::Prime::FastSieve; my $sieve = Math::Prime::FastSieve::Sieve->new(800_000_000); say $sieve->count_sieve;'
-#   1.7s  time perl -E 'use Data::BitStream::XS qw/prime_count/; say prime_count(800_000_000);'
+# Here's a simple test (DBXS 0.07, MPFS 0.12, MPXS 0.26, MP 0.04):
 #
-# 255+s   time perl -E 'use Math::Prime::XS qw/primes/; my @primes = primes(2,10_00_000_000); say scalar @primes;'
-#  64.5s  time perl -E 'use Math::Prime::FastSieve; my $sieve = Math::Prime::FastSieve::Sieve->new(10_000_000_000); say $sieve->count_sieve;'
-#  24.3s  time perl -E 'use Data::BitStream::XS qw/prime_count/; say prime_count(10_000_000_000);'
+#  >1 hr  time perl -E 'use Math::Primality qw/prime_count/; say prime_count(800_000_000);'
+#  15.0s  time perl -E 'use Bit::Vector; my $v = Bit::Vector->new(800_000_000); $v->Primes(); say $v->Norm;'
+#  11.7s  time perl -E 'use Math::Prime::XS qw/primes/; my @primes = primes(2,800_000_000); say scalar @primes;'
+#   2.9s  time perl -E 'use Math::Prime::FastSieve; my $sieve = Math::Prime::FastSieve::Sieve->new(800_000_000); say $sieve->count_sieve;'
+#   0.9s  time perl -E 'use Data::BitStream::XS qw/prime_count/; say prime_count(800_000_000);'
+#
+#
+# 250+s   time perl -E 'use Math::Prime::XS qw/primes/; my @primes = primes(2,10_00_000_000); say scalar @primes;'
+#  42.2s  time perl -E 'use Math::Prime::FastSieve; my $sieve = Math::Prime::FastSieve::Sieve->new(10_000_000_000); say $sieve->count_sieve;'
+#  15.6s  time perl -E 'use Data::BitStream::XS qw/prime_count/; say prime_count(10_000_000_000);'
+#
+# Noting that Math::Prime::XS doesn't really have a proper interface for large
+# prime_count (you have a choice of shooting yourself in the left foot by
+# doing one sieve with a crazy large array return, or the right foot by asking
+# for smaller prime lists repeatedly and spend crazy time sieving).  It would
+# not be hard to add a function to the module so I imagine it just isn't
+# something that has come up as needed.
+#
+# Math::Primality is meant for using with GMP, and the prime_count function is
+# basically a placeholder.  The existing code skips even the most rudimentary
+# of optimizations.
+#
+# Bit::Vector 7.2 uses ints internally, so won't make vectors of 10B primes.
+# It also has no range ability.
+#
+# Math::Big 1.12 works with Math::BigInt and also uses a very memory intensive
+# algorithm (35 *bytes* per number -- that's 1000 times more than DBXS).  That
+# makes its primes() function of very limited use for large sieves.  It also
+# has no range ability.
 
 
 sub gen_primexs {
@@ -65,12 +87,22 @@ sub gen_dbxs_next {
 }
 sub gen_dbxs_erat {
   my($p, $start, $end) = @_;
-  push @{$p}, @{Data::BitStream::XS::primes({method=>'erat'},$start, $end)};
+  push @{$p}, @{Data::BitStream::XS::erat_primes($start, $end)};
   1;
 }
 sub gen_dbxs_simple {
   my($p, $start, $end) = @_;
-  push @{$p}, @{Data::BitStream::XS::primes({method=>'simple'},$start, $end)};
+  push @{$p}, @{Data::BitStream::XS::erat_simple_primes($start, $end)};
+  1;
+}
+sub gen_dbxs_segment {
+  my($p, $start, $end) = @_;
+  push @{$p}, @{Data::BitStream::XS::segment_primes($start, $end)};
+  1;
+}
+sub gen_dbxs_dynamic {
+  my($p, $start, $end) = @_;
+  push @{$p}, @{Data::BitStream::XS::primes($start, $end)};
   1;
 }
 sub gen_pureperl {
@@ -89,6 +121,8 @@ if ($test eq 'lbsr') {
     'MPFS'         => sub { my @p; gen_fastsieve(\@p, $lb, $lb+$sr); },
     'DBXS erat'    => sub { my @p; gen_dbxs_erat(\@p, $lb, $lb+$sr); },
     'DBXS simple'  => sub { my @p; gen_dbxs_simple(\@p, $lb, $lb+$sr); },
+    'DBXS segment' => sub { my @p; gen_dbxs_segment(\@p, $lb, $lb+$sr); },
+    'DBXS dynamic' => sub { my @p; gen_dbxs_dynamic(\@p, $lb, $lb+$sr); },
     'DBXS next'    => sub { my @p; gen_dbxs_next(\@p, $lb, $lb+$sr); },
     'Pure Perl'    => sub { my @p; gen_pureperl(\@p, $lb, $lb+$sr); },
     'Math::Primality' => sub { my @p; gen_primality(\@p, $lb, $lb+$sr); },
@@ -106,6 +140,12 @@ if ($test eq 'lbsr') {
                           },
     'DBXS simple'  => sub { my @p = (2);
                             gen_dbxs_simple(\@p,$p[-1]+1,$_*1000+3) for (@kl);
+                          },
+    'DBXS segment' => sub { my @p = (2);
+                            gen_dbxs_segment(\@p,$p[-1]+1,$_*1000+3) for (@kl);
+                          },
+    'DBXS dynamic' => sub { my @p = (2);
+                            gen_dbxs_dynamic(\@p,$p[-1]+1,$_*1000+3) for (@kl);
                           },
     'DBXS next'    => sub { my @p = (2);
                             gen_dbxs_next(\@p,$p[-1]+1,$_*1000+3) for (@kl);

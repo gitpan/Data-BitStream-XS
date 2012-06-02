@@ -198,8 +198,6 @@ pos(IN Data::BitStream::XS list)
 
 SV *
 fheader(IN Data::BitStream::XS list)
-  PREINIT:
-    char* buf;
   CODE:
     if (list->file_header == 0) {
       XSRETURN_UNDEF;
@@ -266,7 +264,7 @@ write_close(IN Data::BitStream::XS list)
 UV
 read(IN Data::BitStream::XS list, IN int bits, IN const char* flags = 0)
   PREINIT:
-    int readahead;
+    int do_readahead;
   CODE:
     if (list->is_writing) {
       croak("read while writing");
@@ -276,8 +274,8 @@ read(IN Data::BitStream::XS list, IN int bits, IN const char* flags = 0)
       croak("invalid parameters: bits %d must be 1-%d",bits,(int)BITS_PER_WORD);
       XSRETURN_UNDEF;
     }
-    readahead = (flags != 0) && (strcmp(flags, "readahead") == 0);
-    if (readahead) {
+    do_readahead = (flags != 0) && (strcmp(flags, "readahead") == 0);
+    if (do_readahead) {
       if (list->pos >= list->len)
         XSRETURN_UNDEF;
       RETVAL = sreadahead(list, bits);
@@ -824,6 +822,15 @@ prime_init(IN UV n)
 
 UV
 prime_count(IN UV n)
+  CODE:
+    if (GIMME_V == G_VOID) {
+      prime_init(n);
+      RETVAL = 0;
+    } else {
+      RETVAL = prime_count(n);
+    }
+  OUTPUT:
+    RETVAL
 
 UV
 prime_count_lower(IN UV n)
@@ -834,12 +841,18 @@ prime_count_upper(IN UV n)
 UV
 prime_count_approx(IN UV n)
 
+UV
+nth_prime(IN UV n)
+
 int
 is_prime(IN UV n)
 
 UV
 next_prime(IN UV n)
 
+
+UV
+_get_prime_cache_size()
 
 SV*
 sieve_primes(IN UV low, IN UV high)
@@ -884,6 +897,48 @@ trial_primes(IN UV low, IN UV high)
   OUTPUT:
     RETVAL
 
+SV*
+segment_primes(IN UV low, IN UV high, IN UV segment_size = 65536UL)
+  PREINIT:
+    AV* av = newAV();
+    unsigned char* sieve;
+  CODE:
+    if ((low <= 2) && (high >= 2)) { av_push(av, newSVuv( 2 )); }
+    if ((low <= 3) && (high >= 3)) { av_push(av, newSVuv( 3 )); }
+    if ((low <= 5) && (high >= 5)) { av_push(av, newSVuv( 5 )); }
+    if (low < 7)  low = 7;
+    if (low <= high) {
+      /* Call the segment siever one or more times */
+      sieve = (unsigned char*) malloc( segment_size );
+      if (sieve == 0)
+        croak("Could not allocate %lu bytes for segment sieve", segment_size);
+      while (low <= high) {
+        WTYPE seghigh = ((high/30 - low/30) < segment_size)
+                          ?  high
+                          :  ( (low/30 + segment_size-1)*30+29 );
+        WTYPE startd = low/30;
+        WTYPE endd = seghigh/30;
+        WTYPE ranged = endd - startd + 1;
+        assert(endd >= startd);
+        assert(ranged <= segment_size);
+
+        /* Sieve from startd*30+1 to endd*30+29.  */
+        if (sieve_segment(sieve, startd, endd) == 0) {
+          croak("Could not segment sieve from %lu to %lu", startd*30+1, endd*30+29);
+          break;
+        }
+
+        START_DO_FOR_EACH_SIEVE_PRIME( sieve, low-startd*30, seghigh-30*startd )
+          av_push(av,newSVuv( startd*30 + p ));
+        END_DO_FOR_EACH_SIEVE_PRIME
+
+        low = seghigh+2;
+      }
+      free(sieve);
+    }
+    RETVAL = newRV_noinc( (SV*) av );
+  OUTPUT:
+    RETVAL
 
 SV*
 erat_primes(IN UV low, IN UV high)
@@ -894,7 +949,7 @@ erat_primes(IN UV low, IN UV high)
     if (low <= high) {
       sieve = sieve_erat30(high);
       if (sieve == 0) {
-        croak("Could not generate sieve for %ld", high);
+        croak("Could not generate sieve for %lu", high);
       } else {
         if ((low <= 2) && (high >= 2)) { av_push(av, newSVuv( 2 )); }
         if ((low <= 3) && (high >= 3)) { av_push(av, newSVuv( 3 )); }

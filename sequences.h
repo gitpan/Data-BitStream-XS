@@ -8,7 +8,7 @@
 
 #include "wtype.h"
 
-extern WTYPE get_prime_cache_size(void);
+extern WTYPE _get_prime_cache_size(void);
 extern WTYPE get_prime_cache(WTYPE n, const unsigned char** sieve);
 extern int   is_prime(WTYPE x);
 extern WTYPE next_trial_prime(WTYPE x);
@@ -19,20 +19,15 @@ extern WTYPE prime_count_upper(WTYPE x);
 extern WTYPE prime_count_approx(WTYPE x);
 extern WTYPE prime_count(WTYPE x);
 
+extern WTYPE nth_prime(WTYPE n);
+
 extern void  prime_init(WTYPE x);
 extern WTYPE* sieve_erat(WTYPE end);
 extern unsigned char* sieve_erat30(WTYPE end);
+extern int sieve_segment(unsigned char* mem, WTYPE startd, WTYPE endd);
 
-typedef struct
-{
-  int    curlen;   /* indicates array[curlen-1] is defined */
-  int    maxlen;   /* indicates array[maxlen-1] can be used */
-  WTYPE* array;
-} PrimeArray;
-
-extern int   expand_primearray_index(PrimeArray* p, int index);
-extern int   expand_primearray_value(PrimeArray* p, WTYPE value);
 extern int   find_best_pair(WTYPE* basis, int basislen, WTYPE val, int adder, int* a, int* b);
+extern int   find_best_prime_pair(WTYPE val, int adder, int* a, int* b);
 
 
 
@@ -71,26 +66,26 @@ static int is_prime_in_sieve(const unsigned char* sieve, WTYPE p) {
 
 /* Warning -- can go off the end of the sieve */
 static WTYPE next_prime_in_sieve(const unsigned char* sieve, WTYPE p) {
-  WTYPE d = p/30;
-  WTYPE m = p - d*30;
-  if (m == 29) d++;
-  m = nextwheel30[m];
-  while (sieve[d] & masktab30[m]) {
-    m = nextwheel30[m];
-    if (m == 1) d++;
-  }
+  WTYPE d, m;
+  if (p < 7)
+    return (p < 2) ? 2 : (p < 3) ? 3 : (p < 5) ? 5 : 7;
+  d = p/30;
+  m = p - d*30;
+  do {
+    if (m==29) { d++; m = 1; while (sieve[d] == 0xFF) d++; }
+    else       { m = nextwheel30[m]; }
+  } while (sieve[d] & masktab30[m]);
   return(d*30+m);
 }
-/* Returns 0 at the end */
 static WTYPE prev_prime_in_sieve(const unsigned char* sieve, WTYPE p) {
-  WTYPE d = p/30;
-  WTYPE m = p - d*30;
-  if (m <= 1) { if (d == 0) return 0;  d--; }
-  m = prevwheel30[m];
-  while (sieve[d] & masktab30[m]) {
-    m = prevwheel30[m];
-    if (m == 29) { if (d == 0) return 0;  d--; }
-  }
+  WTYPE d, m;
+  if (p <= 7)
+    return (p <= 2) ? 0 : (p <= 3) ? 2 : (p <= 5) ? 3 : 5;
+  d = p/30;
+  m = p - d*30;
+  do {
+    m = prevwheel30[m];  if (m==29) { if (d == 0) return 0;  d--; }
+  } while (sieve[d] & masktab30[m]);
   return(d*30+m);
 }
 

@@ -7,9 +7,7 @@ use Carp qw/croak confess/;
 
 BEGIN {
   $Data::BitStream::XS::AUTHORITY = 'cpan:DANAJ';
-}
-BEGIN {
-  $Data::BitStream::XS::VERSION = '0.06';
+  $Data::BitStream::XS::VERSION = '0.07';
 }
 
 # parent is cleaner, and in the Perl 5.10.1 / 5.12.0 core, but not earlier.
@@ -18,14 +16,16 @@ use base qw( Exporter );
 our @EXPORT_OK = qw(
                      code_is_supported code_is_universal
                      is_prime  next_prime  primes
-                     prime_count
+                     prime_init prime_count
                      prime_count_lower  prime_count_upper  prime_count_approx
+                     nth_prime
                    );
 
 BEGIN {
   eval {
     require XSLoader;
     XSLoader::load(__PACKAGE__, $Data::BitStream::XS::VERSION);
+    prime_init(0);
     1;
   } or do {
     # We could insert a Pure Perl implementation here.
@@ -438,37 +438,53 @@ sub primes {
   my $optref = {};  $optref = shift if ref $_[0] eq 'HASH';
   croak "no parameters to primes" unless scalar @_ > 0;
   croak "too many parameters to primes" unless scalar @_ <= 2;
-  my $start = (@_ == 2)  ?  shift  :  2;
-  my $end = shift;
+  my $low = (@_ == 2)  ?  shift  :  2;
+  my $high = shift;
   my $sref = [];
 
   # Validate parameters
-  if ( (!defined $start) || (!defined $end) ||
-       #($start < 0) || ($end < 0) ||
-       ($start =~ tr/0123456789//c) || ($end =~ tr/0123456789//c)
+  if ( (!defined $low) || (!defined $high) ||
+       #($low < 0) || ($high < 0) ||
+       ($low =~ tr/0123456789//c) || ($high =~ tr/0123456789//c)
      ) {
     croak "Parameters must be positive integers";
   }
-  return $sref if $start > $end;
+  return $sref if ($low > $high) || ($high < 2);
 
   my $method = $optref->{'method'};
-  if (!defined $method) {
-    $method = 'Sieve';
-    if (($start+1) >= $end) { $method = 'Trial'; }
+  $method = 'Dynamic' unless defined $method;
+
+  if ($method =~ /^(Dyn\w*|Default|Generate)$/i) {
+    # Dynamic -- we should try to do something smart.
+
+    # Tiny range?
+    if (($low+1) >= $high) {
+      $method = 'Trial';
+
+    # Fast for cached sieve?
+    } elsif (($high <= (65536*30)) || ($high <= _get_prime_cache_size)) {
+      $method = 'Sieve';
+
+    # More memory than we should reasonably use for base sieve?
+    } elsif ($high > (32*1024*1024*30)) {
+      $method = 'Segment';
+
+    # Only want half or less of the range 2-high ?
+    } elsif ( int($high / ($high-$low)) >= 2 ) {
+      $method = 'Segment';
+
+    } else {
+      $method = 'Sieve';
+    }
   }
 
-  if ($method =~ /^Trial$/i) {            # Force trial division
-    $sref = trial_primes($start, $end);
-  } elsif ($method =~ /^Erat\w*$/i) {     # Force full SoE
-    $sref = erat_primes($start, $end);
-  } elsif ($method =~ /^Simple\w*$/i) {   # Force basic SoE
-    $sref = erat_simple_primes($start, $end);
-  } elsif ($method =~ /^Sieve$/i) {
-    # Do a smart cached thing (typically sieving).
-    $sref = sieve_primes($start, $end);
-  } else {
-    croak "Unknown prime method: $method";
-  }
+  if    ($method =~ /^Trial$/i)     { $sref = trial_primes($low, $high); }
+  elsif ($method =~ /^Erat\w*$/i)   { $sref = erat_primes($low, $high); }
+  elsif ($method =~ /^Simple\w*$/i) { $sref = erat_simple_primes($low, $high); }
+  elsif ($method =~ /^Seg\w*$/i)    { $sref = segment_primes($low, $high); }
+  elsif ($method =~ /^Sieve$/i)     { $sref = sieve_primes($low, $high); }
+  else { croak "Unknown prime method: $method"; }
+
   #return (wantarray) ? @{$sref} : $sref;
   return $sref;
 }
@@ -483,9 +499,18 @@ __END__
 
 =pod
 
+=encoding utf8
+
+
 =head1 NAME
 
 Data::BitStream::XS - A bit stream class including integer coding methods
+
+
+=head1 VERSION
+
+version 0.07
+
 
 =head1 SYNOPSIS
 
@@ -510,8 +535,8 @@ Bit streams are often used in data compression and in embedded products where
 memory is at a premium.
 
 This code provides a nearly drop-in XS replacement for the L<Data::BitStream>
-module.  If you do not need the flexibility of the Moose/Mouse system, you can
-use this directly.
+module.  If you do not need the flexibility of the Moose/Mouse/Moo system, you
+can use this directly.
 
 Versions 0.03 and later of the L<Data::BitStream> class will attempt to use
 this XS class if it is available.  Most operations will be 50-100 times faster,
@@ -519,10 +544,10 @@ while not sacrificing any of its flexibility, so it is highly recommended.  In
 other words, if this module is installed, any code using L<Data::BitStream>
 will automatically speed up.
 
-While direct use of the XS class is a bit faster than going through Mouse/Moose,
-the vast majority of the benefit is internal.  Hence, for maximum portability
-and flexibility just install this module for the speed, and continue using the
-L<Data::BitStream> class as usual.
+While direct use of the XS class is a bit faster than going through
+Moose/Mouse/Moo, the vast majority of the benefit is internal.  Hence, for
+maximum portability and flexibility just install this module for the speed,
+and continue using the L<Data::BitStream> class as usual.
 
 
 
@@ -1139,11 +1164,14 @@ approximately equal to the code used by L<Math::Prime::XS> version 0.26
 
 =item B<next_prime($n)>
 
-Given an unsigned integer C<n>, returns the next prime number.  This is
-accomplished by trying C<is_prime> each number greater than C<n> (skipping
-multiples of 2, 3, and 5) until a prime is found.  No memory is used during
-the process.  The number returned will always be greater than C<n>, barring
-any possibility of unsigned long overflow.
+Given an unsigned integer C<n>, returns the next prime number.  If we have
+sieve data (e.g. from C<prime_init> or if it is a small number), then that
+is used.  Otherwise, C<is_prime> is called for each number greater than
+C<n> (skipping multiples of 2, 3, and 5) until a prime is found.  No extra
+memory is used during the process.
+
+The number returned will always be greater than C<n>, barring any possibility
+of unsigned long overflow.
 
 Note that the sequence of primes starts with 2, 3, 5, 7, ...
 
@@ -1159,11 +1187,24 @@ so successive calls within the range will be faster.
 
 At this time, it is the fastest prime generator on CPAN to my knowledge, and
 will use less memory for sieving.  For sieving the first primes below C<10^10>
-(10 billion), it is about 2.5x faster than L<Math::Prime::FastSieve> 0.10,
-and over 10x faster than L<Math::Prime::XS>.  Substantial performance
-improvements remain possible in both speed and space.  Note also that for
-small numbers, e.g. less than C<10^6> (1 million), the difference is
-1.1x - 1.5x at most, and it really doesn't matter which you use.
+(10 billion), it is about 2x faster than L<Math::Prime::FastSieve> 0.12,
+and over 10x faster than L<Math::Prime::XS>.  For small numbers, e.g. less
+than C<10^6> (1 million), the difference is 1.1x - 1.5x at most, so it really
+doesn't matter which XS module you use.  Lastly, while the siever included
+here is pretty efficient, it isn't state of the art by any means, and is
+significantly slower than several freely available non-Perl packages.  In
+particular, both primesieve and Tomás Oliveira e Silva's segmented siever
+are much faster.
+
+Using the default method, no more than 32MB of internal memory will be used
+for any range where C<high E<lt> 10^18>, making it by far the most memory
+efficient sieving solution on CPAN.  It should remain under C<140MB> for
+any 64-bit ranges allowed.  Note that far more memory will be used by the
+return array reference if a large range is given.  It will be more efficient
+to loop over reasonable size ranges (and call C<prime_init> with the square
+root of the maximum C<high> if you want to avoid possible recalculation of
+the base sieve).
+
 
 =item B<primes({method=>$method}, $low, $high)>
 
@@ -1171,20 +1212,22 @@ An optional set of options can be given to the primes function as a hash
 reference in the first parameter.  Currently only C<method> is used, and
 possible values are:
 
-  C<Sieve>    Cached sieve (whatever is most efficient)
-  C<Erat>     Uncached efficient Sieve of Eratosthenes
-  C<Simple>   Uncached simple Sieve of Eratosthenes
-  C<Trial>    Uncached trial division.
+    Dynamic    Whatever is most efficient, including caching.
+    Erat       Uncached efficient Sieve of Eratosthenes
+    Simple     Uncached simple Sieve of Eratosthenes
+    Trial      Uncached trial division.
+    Segment    Uncached segmented sieve
+    Sieve      Cached efficient Sieve of Eratosthenes
 
-The default method is either C<Trial> or C<Sieve> depending on the range.  A
-future version will include C<Segment> as an option.
+The default method is C<Dynamic>, where the actual operation will depend on
+the base and range.
 
 
 =item B<prime_init($n)>
 
-Precalculates anything necessary to do fast calls for sieving within the range
-up to C<n>.  Not necessary, but very helpful if doing repeated calls to methods
-like C<is_prime>, C<prime_count>, and C<primes> with increasing C<n>.
+Precalculates anything necessary to do fast calls for operations within the
+range up to C<n>.  Not necessary, but very helpful if doing repeated calls to
+methods like C<is_prime>, C<prime_count>, and C<primes> with increasing C<n>.
 
 
 =item B<prime_count($n)>
@@ -1224,6 +1267,16 @@ is just an average of the upper and lower bounds, but note that this is within
 C<9> for all C<n E<lt> 15_809> and within C<50> for all C<n E<lt> 1_763_367>.
 
 
+=item B<nth_prime($n)>
+
+Returns the value of the nth prime, for C<n E<gt>= 1>.  Note that:
+
+  prime_count(nth_prime(n)) = n
+
+  nth_prime(prime_count(n)+1) = next_prime(n)
+
+for all <n E<gt>= 1>.
+
 
 =item B<sieve_primes>
 
@@ -1233,10 +1286,12 @@ C<9> for all C<n E<lt> 15_809> and within C<50> for all C<n E<lt> 1_763_367>.
 
 =item B<trial_primes>
 
-Methods for specific sieving: cached efficient sieve, efficient Sieve of
-Eratosthenes, simple Sieve of Eratosthenes, and trial division.  These may
-disappear in a future version, so use the C<method> argument to C<primes>
-instead.
+=item B<segment_primes>
+
+Methods for specific sieving: cached sieve, efficient Sieve of
+Eratosthenes, simple Sieve of Eratosthenes, trial division, and segmented
+sieve.  These will likely disappear in a future version, so use the C<method>
+argument to C<primes> instead.
 
 =back
 
@@ -1296,6 +1351,16 @@ instead.
 Dana Jacobsen E<lt>dana@acm.orgE<gt>
 
 
+=head1 ACKNOWLEDGEMENTS
+
+Peter Elias, Peter Fenwick, and David Solomon have excellent resources on
+variable length coding, and Solomon especially has done a lot of work in
+tracking down and explaining many of the more obscure codes.
+
+For prime number work, Eratosthenes of Cyrene provided the world with his
+wonderfully elegant and simple algorithm for finding the primes.
+Terje Mathisen, A.R. Quesada, and B. Van Pelt all had useful ideas which I
+used in my wheel sieve.
 
 
 =head1 COPYRIGHT
