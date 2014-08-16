@@ -43,3 +43,7 @@
 - primes and Goldbach behavior needs to be examined near the 32-bit boundary
   when running on 32-bit Perl.  In fact, all the primes code should be examined
   for possible overflow issues.
+
+- Use proper print/croak % macros instead of %lu etc.
+
+- use UV instead of int.

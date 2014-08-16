@@ -48,7 +48,6 @@ my @encodings;
   BinWord(20)
 |;
 @encodings = qw|Gamma Delta Omega Fibonacci Baer(-1)|;
-@encodings = qw|GoldbachG1 GoldbachG2|;
 
 my $list_n = 2048;
 my @list_small;
@@ -86,7 +85,7 @@ srand(15);
     elsif ($d < 0.50) { push @list_large, int(rand(256)); }
     elsif ($d < 0.75) { push @list_large, int(rand(16000)); }
     elsif ($d < 0.98) { push @list_large, int(rand(65000)); }
-    else              { push @list_large, int(rand(1_0000_000)); }
+    else              { push @list_large, int(rand(1_000_000)); }
   }
 }
 
@@ -147,7 +146,7 @@ sub time_list {
 
   my $e2 = int(tv_interval($s2)*1_000_000);
   foreach my $i (0 .. $#list) {
-      die "incorrect $encoding coding for list[$i] = $list[$i]" if $a[$i] != $list[$i];
+      die "incorrect $encoding coding for $i" if $a[$i] != $list[$i];
   }
   # convert total uS time into ns/value
   $e1 = int(1000 * ($e1 / scalar @list));
